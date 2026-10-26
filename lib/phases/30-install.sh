@@ -116,7 +116,9 @@ phase_install() {
     mta=$(inv_get SRC_MTA)
     if [[ "$INSTALL_MTA" == yes || ("$INSTALL_MTA" == auto && "$mta" != none && -n "$mta") ]]; then
         pkg_install postfix
+        configure_postfix
         run systemctl enable --now postfix
+        run systemctl restart postfix
     else
         log "Kein Mailserver (Quelle: ${mta:-?}, INSTALL_MTA=$INSTALL_MTA)."
     fi
@@ -132,6 +134,21 @@ phase_install() {
     run systemctl enable --now php-fpm
     run systemctl enable --now crond
     run systemctl enable httpd   # Start erst nach der Konfiguration
+}
+
+# postfix wie den alten Mailserver auftreten lassen: gleicher Hostname im
+# HELO/Absender, und nur IPv4 – EC2-IPv6-Adressen haben meist kein
+# Reverse-DNS, große Anbieter (z.B. Microsoft 365) lehnen das ab.
+configure_postfix() {
+    local host
+    host=$(inv_get SRC_HOSTNAME)
+    run postconf -e "inet_protocols = ipv4"
+    if [[ "$host" == *.* ]]; then
+        run postconf -e "myhostname = $host"
+    else
+        warn "postfix: Hostname der Quelle unbekannt – myhostname bitte manuell setzen (postconf -e myhostname=...)"
+    fi
+    log "postfix: Ausgehende Mails gehen direkt über Port 25. Falls Mails nicht ankommen: AWS blockiert Port 25 standardmäßig (Freigabe beantragen oder Amazon SES als Relay nutzen)."
 }
 
 install_pecl() {
