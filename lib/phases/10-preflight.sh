@@ -32,9 +32,9 @@ phase_preflight() {
     log "Quelle: $rel"
     [[ "$rel" == *"Amazon Linux"* ]] || warn "Quelle meldet sich nicht als Amazon Linux: '$rel'"
 
-    if ! src_ssh 'command -v rsync >/dev/null'; then
-        log "Installiere rsync auf der Quelle ..."
-        src_ssh 'sudo -n yum -y -q install rsync' || die "rsync konnte auf der Quelle nicht installiert werden."
+    if ! src_ssh 'command -v rsync >/dev/null && command -v tar >/dev/null && command -v gzip >/dev/null'; then
+        log "Installiere rsync/tar/gzip auf der Quelle ..."
+        src_ssh 'sudo -n yum -y -q install rsync tar gzip' || die "rsync/tar/gzip konnten auf der Quelle nicht installiert werden."
     fi
 
     if is_yes "$MIGRATE_DATABASE"; then

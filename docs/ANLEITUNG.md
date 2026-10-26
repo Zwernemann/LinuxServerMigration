@@ -1,4 +1,4 @@
-# Schritt-für-Schritt-Anleitung: Umzug von Amazon Linux 2018 auf 2023
+# Schritt-für-Schritt-Anleitung: Umzug von Amazon Linux 2018 / Amazon Linux 2 auf 2023
 
 Diese Anleitung setzt **keine Linux-Profikenntnisse** voraus. Alles, was du
 brauchst, ist ein Browser und dein AWS-Login.
@@ -288,8 +288,9 @@ Automatisierung *AWSSupport-ResetAccess* (Systems Manager → Automatisierung).
 Sie setzt einen neuen Schlüssel, **stoppt dafür aber den Server kurz**.
 Alternativ hilft der AWS-Support.
 
-> EC2 Instance Connect funktioniert beim alten Amazon Linux 2018 nicht; erst
-> ab Amazon Linux 2.
+> **Amazon Linux 2:** Hier gibt es zusätzlich *EC2 Instance Connect*
+> (EC2-Konsole → *Verbinden* → *EC2 Instance Connect*), ganz ohne
+> Schlüsseldatei. Beim alten Amazon Linux 2018 funktioniert das nicht.
 
 ---
 
@@ -334,6 +335,28 @@ Die Version zeigt `mysql --version`.)
 `MIGRATE_DATABASE="no"` setzen. Die Anwendung greift weiter auf RDS zu.
 
 ---
+
+## Checkliste aus der Praxis
+
+Diese Punkte haben sich bei echten Umzügen als wichtig erwiesen:
+
+- [ ] **SSH-Port:** Läuft SSH auf dem alten Server nicht auf Port 22? Dann
+      `SRC_SSH_PORT` in `migration.conf` setzen. Auf dem neuen Server den
+      gewünschten Port in `/etc/ssh/sshd_config.d/10-port.conf` eintragen.
+- [ ] **MySQL-Benutzer:** Der Benutzer der Anwendung reicht oft
+      (`SRC_DB_USER`/`SRC_DB_PASS`), wenn er Rechte auf alle Datenbanken hat.
+- [ ] **Alter PHP-Code** (`mysql_*`, `.php3`) läuft über die
+      Kompatibilitätsschicht. Prüfen: `php -i | grep auto_prepend_file`.
+- [ ] **Restdateien** wie `*.php_alt` oder `*.php3_notUsed` sind auf dem
+      alten Server oft öffentlich lesbar. Aus dem Webverzeichnis verschieben.
+- [ ] **cron** läuft auf dem neuen Server erst nach dem Cutover. So gibt es
+      keine doppelten Erinnerungsmails.
+- [ ] **Mailversand testen**, bevor umgeschaltet wird. Amazon sperrt Port 25
+      bei neuen Servern oft.
+- [ ] **Zertifikate:** Das Tool erkennt acme.sh oder certbot. Nach dem
+      Umhängen der Elastic IP eine Erneuerung testen.
+- [ ] **Elastic IP** behalten. Dann bleiben IP, Reverse-DNS und SPF gleich,
+      und Mails kommen weiter an.
 
 ## Häufige Fragen
 

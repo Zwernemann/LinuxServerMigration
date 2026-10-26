@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  LinuxServerMigration – Amazon Linux AMI 2018.03  ──►  Amazon Linux 2023
+#  LinuxServerMigration – Amazon Linux AMI 2018.03 / Amazon Linux 2  ──►  Amazon Linux 2023
 #  Apache + PHP + MySQL, vollautomatisch.
 #
 #  Läuft als root auf dem NEUEN Server und holt alles per SSH/rsync vom alten.

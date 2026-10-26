@@ -1,6 +1,6 @@
 # =============================================================================
 #  Konfiguration für LinuxServerMigration
-#  Amazon Linux AMI 2018.03  ──►  Amazon Linux 2023
+#  Amazon Linux AMI 2018.03 / Amazon Linux 2  ──►  Amazon Linux 2023
 #
 #  Kopieren nach  migration.conf  und anpassen:
 #      cp migration.conf.example migration.conf
@@ -8,7 +8,7 @@
 # =============================================================================
 
 # ---------------------------------------------------------------------------
-# Quellserver (alter Amazon Linux 2018.03)
+# Quellserver (alter Amazon Linux 2018.03 oder Amazon Linux 2)
 # ---------------------------------------------------------------------------
 # Am besten die PRIVATE IP verwenden – die Elastic IP wird beim Cutover
 # eventuell auf den neuen Server umgehängt.

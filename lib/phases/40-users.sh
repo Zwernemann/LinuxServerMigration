@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# Phase "users": lokale Linux-Benutzer und Gruppen (UID/GID >= 500) übernehmen.
+# Phase "users": lokale Linux-Benutzer und Gruppen übernehmen (ab UID_MIN der Quelle).
 # Amazon Linux AMI 2018 vergibt UIDs ab 500, AL2023 ab 1000 – vorhandene
 # UIDs werden beibehalten, sofern sie auf dem Ziel frei sind.
 
@@ -10,11 +10,14 @@ phase_users() {
     passwd=$(snap /etc/passwd) group=$(snap /etc/group) shadow=$(snap /etc/shadow)
     [[ -f "$passwd" && -f "$group" ]] || die "Kein passwd/group im Schnappschuss – 'inventory' erneut ausführen."
 
-    local name gid members uid gecos home shell hash args
+    local name gid members uid gecos home shell hash args umin gmin
+    # Erste UID/GID "echter" Benutzer auf der Quelle (AMI 2018: 500, AL2: 1000)
+    umin=$(inv_get SRC_UID_MIN); umin=${umin:-500}
+    gmin=$(inv_get SRC_GID_MIN); gmin=${gmin:-$umin}
     # 1) Gruppen (eigene Gruppen der Quelle)
     while IFS=: read -r name _ gid _; do
         [[ "$gid" =~ ^[0-9]+$ ]] || continue
-        (( gid >= 500 && gid < 65534 )) || continue
+        (( gid >= gmin && gid < 65534 )) || continue
         getent group "$name" >/dev/null && continue
         if getent group "$gid" >/dev/null; then
             run groupadd "$name"
@@ -27,7 +30,7 @@ phase_users() {
     # 2) Benutzer
     while IFS=: read -r name _ uid gid gecos home shell; do
         [[ "$uid" =~ ^[0-9]+$ ]] || continue
-        (( uid >= 500 && uid < 65534 )) || continue
+        (( uid >= umin && uid < 65534 )) || continue
         [[ "$name" == ec2-user ]] && continue
         if getent passwd "$name" >/dev/null; then
             log "Benutzer $name existiert bereits."

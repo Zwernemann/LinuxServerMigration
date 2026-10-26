@@ -67,8 +67,8 @@ start_box "$SRC" 'srcR00t!'
 docker exec -i "$SRC" bash -e <<'EOF'
 ssh-keygen -A >/dev/null
 useradd -m -u 500 ec2-user
-useradd -m -u 501 webdev
-groupadd -g 510 webteam
+useradd -m -u 1501 webdev
+groupadd -g 1510 webteam
 usermod -aG webteam webdev
 usermod -aG webteam ec2-user
 echo 'webdev:$6$salt$abcdefghijklmnopqrstuv' | chpasswd -e
@@ -168,8 +168,9 @@ docker exec "$TGT" /opt/migration/migrate.sh -y inventory users files database c
 echo "== Prüfungen"
 fail=0
 t() { if docker exec "$TGT" bash -c "$2" >/dev/null 2>&1; then echo "  ok   $1"; else echo "  FEHLER $1"; fail=1; fi; }
-t "Benutzer webdev mit UID 501"            'id -u webdev | grep -qx 501'
-t "Gruppe webteam (GID 510) mit Mitgliedern" 'getent group webteam | grep -q "^webteam:x:510:.*webdev"'
+t "Benutzer webdev mit UID 1501"           'id -u webdev | grep -qx 1501'
+t "Gruppe webteam (GID 1510) mit Mitgliedern" 'getent group webteam | grep -q "^webteam:x:1510:.*webdev"'
+t "Systembenutzer (UID < UID_MIN) nicht übernommen" '! grep -q "useradd.* nginx$\|useradd.* mysql$" /var/log/server-migration/*.log'
 t "ec2-user nicht neu angelegt"             '! id ec2-user'
 t "Passwort-Hash übernommen"                'grep -qF "webdev:\$6\$salt\$abc" /etc/shadow'
 t "Home-Verzeichnis kopiert"                'grep -q "nur auf der Quelle" /home/webdev/notiz.txt'

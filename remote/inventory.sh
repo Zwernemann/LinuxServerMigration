@@ -22,25 +22,46 @@ cmd system-release.txt cat /etc/system-release
 cmd uname.txt uname -a
 cmd hostname.txt hostname -f
 cmd packages.tsv sh -c "rpm -qa --qf '%{NAME}\t%{VERSION}-%{RELEASE}\n' | sort"
-cmd services-enabled.txt sh -c "chkconfig --list 2>/dev/null | awk '/3:on/{print \$1}'"
-cmd services-running.txt sh -c "service --status-all 2>/dev/null | grep -i 'running' "
+# Amazon Linux 2 nutzt systemd, Amazon Linux AMI 2018 SysV-Init (chkconfig)
+if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
+    cmd services-enabled.txt sh -c "systemctl list-unit-files --type=service --no-legend 2>/dev/null | awk '\$2==\"enabled\" {sub(/\\.service\$/, \"\", \$1); print \$1}' | sort -u"
+    cmd services-running.txt sh -c "systemctl list-units --type=service --state=running --no-legend 2>/dev/null | awk '{print \$1}'"
+else
+    cmd services-enabled.txt sh -c "chkconfig --list 2>/dev/null | awk '/3:on/{print \$1}'"
+    cmd services-running.txt sh -c "service --status-all 2>/dev/null | grep -i 'running' "
+fi
 cmd listen.txt sh -c 'netstat -tlnp 2>/dev/null || ss -tlnp'
 cmd df.txt df -hP
 cmd crontab-users.txt ls -1 /var/spool/cron
 cmd sudoers.d.txt ls -1 /etc/sudoers.d
 
-ZONE=UTC
-if [ -r /etc/sysconfig/clock ]; then
-    # shellcheck disable=SC1091
-    ZONE=$(. /etc/sysconfig/clock 2>/dev/null; echo "${ZONE:-UTC}")
+# AL2 (timedatectl): /etc/localtime ist ein Symlink, /etc/sysconfig/clock oft
+# veraltet. AMI 2018: /etc/localtime ist eine Kopie, Zone in sysconfig/clock.
+ZONE=""
+if [ -L /etc/localtime ]; then
+    ZONE=$(readlink -f /etc/localtime | sed -n 's#^.*/zoneinfo/##p')
 fi
+if [ -z "$ZONE" ] && [ -r /etc/sysconfig/clock ]; then
+    # shellcheck disable=SC1091
+    ZONE=$(. /etc/sysconfig/clock 2>/dev/null; echo "${ZONE:-}")
+fi
+ZONE=${ZONE:-UTC}
+
+# Ab welcher UID/GID beginnen "echte" Benutzer? AMI 2018: 500, AL2: 1000
+UID_MIN=$(awk '$1=="UID_MIN" {print $2}' /etc/login.defs 2>/dev/null)
+GID_MIN=$(awk '$1=="GID_MIN" {print $2}' /etc/login.defs 2>/dev/null)
+if [ -z "$UID_MIN" ]; then
+    if grep -q 'Amazon Linux AMI' /etc/system-release 2>/dev/null; then UID_MIN=500; else UID_MIN=1000; fi
+fi
+summary SRC_UID_MIN "$UID_MIN"
+summary SRC_GID_MIN "${GID_MIN:-$UID_MIN}"
 summary SRC_OS "$(cat /etc/system-release 2>/dev/null)"
 summary SRC_HOSTNAME "$(hostname -f 2>/dev/null || cat /proc/sys/kernel/hostname)"
 summary SRC_TIMEZONE "$ZONE"
 
 MTA=none
 for s in postfix sendmail exim; do
-    if service "$s" status >/dev/null 2>&1; then MTA=$s; break; fi
+    if systemctl is-active -q "$s" 2>/dev/null || service "$s" status >/dev/null 2>&1; then MTA=$s; break; fi
 done
 summary SRC_MTA "$MTA"
 
@@ -81,16 +102,23 @@ if command -v httpd >/dev/null 2>&1; then
 fi
 
 # ---------------------------------------------------------------- PHP
-if command -v php >/dev/null 2>&1; then
-    rlog "PHP ..."
-    summary SRC_PHP_VERSION "$(php -r 'echo PHP_VERSION;' 2>/dev/null)"
-    cmd php-modules.txt sh -c "php -m 2>/dev/null | grep -v '^\[' | grep -v '^\$' | tr 'A-Z' 'a-z' | sort -u"
-    PHP_INI_KEYS=${PHP_INI_KEYS:-} php -r '
+# Auf Amazon Linux 2 ist PHP 5.6/7.x oft aus den Remi-Repos installiert –
+# als System-PHP oder als Software Collection unter /opt/remi/phpXX
+PHPBIN=$(command -v php 2>/dev/null || true)
+if [ -z "$PHPBIN" ]; then
+    for f in /opt/remi/php*/root/usr/bin/php; do [ -x "$f" ] && PHPBIN=$f; done
+fi
+if [ -n "$PHPBIN" ]; then
+    rlog "PHP ($PHPBIN) ..."
+    summary SRC_PHP_BIN "$PHPBIN"
+    summary SRC_PHP_VERSION "$("$PHPBIN" -r 'echo PHP_VERSION;' 2>/dev/null)"
+    cmd php-modules.txt sh -c "'$PHPBIN' -m 2>/dev/null | grep -v '^\[' | grep -v '^\$' | tr 'A-Z' 'a-z' | sort -u"
+    PHP_INI_KEYS=${PHP_INI_KEYS:-} "$PHPBIN" -r '
         foreach (preg_split("/\s+/", getenv("PHP_INI_KEYS"), -1, PREG_SPLIT_NO_EMPTY) as $k) {
             $v = ini_get($k);
             if ($v !== false) { echo $k, "\t", str_replace(array("\t", "\n"), " ", $v), "\n"; }
         }' >php-ini.tsv 2>/dev/null </dev/null || true
-    cmd php-ini-files.txt php --ini
+    cmd php-ini-files.txt "$PHPBIN" --ini
 else
     summary SRC_PHP_VERSION ""
 fi
