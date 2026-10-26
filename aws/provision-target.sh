@@ -14,10 +14,11 @@
 #   3. Security Group "linuxservermigration-<id>" anlegen und beim alten
 #      Server SSH (Port 22) NUR von dieser Gruppe erlauben
 #   4. Neuen Server starten: gleiches Subnetz, gleiche Security Groups,
-#      gleiches Schlüsselpaar, aktuelles AL2023, verschlüsselte gp3-Platte.
-#      Beim ersten Start installiert er das Migrations-Tool nach
-#      /opt/linuxservermigration und erzeugt einen eigenen SSH-Schlüssel.
-#   5. Diesen Schlüssel beim alten Server hinterlegen – automatisch über
+#      gleiches Schlüsselpaar, aktuelles AL2023, verschlüsselte gp3-Platte
+#      (oder mit --new-instance einen schon vorhandenen Server übernehmen)
+#   5. Über Session Manager auf dem neuen Server das Migrations-Tool nach
+#      /opt/linuxservermigration installieren (aws/setup-target.sh)
+#   6. Dessen SSH-Schlüssel beim alten Server hinterlegen – automatisch über
 #      Session Manager, sonst mit einer Anleitung für einen Befehl.
 #
 #  Optionen:
@@ -26,6 +27,8 @@
 #                        t2/m4/c4/r4 werden auf die aktuelle Generation gehoben)
 #    --disk-size GB      Größe der Systemplatte (Standard: Summe der Platten
 #                        des alten Servers, mindestens 20)
+#    --new-instance ID   einen bereits angelegten AL2023-Server verwenden,
+#                        statt einen neuen zu starten
 #    --name NAME         Name des neuen Servers (Standard: <alter Name>-al2023)
 #    --region R          AWS-Region (Standard: Region der CloudShell)
 #    --yes               nicht nachfragen
@@ -36,16 +39,17 @@
 # =============================================================================
 set -euo pipefail
 
-OLD=""; TYPE=""; DISK=""; NAME=""; YES=0; CLEANUP=0
+OLD=""; NEWARG=""; TYPE=""; DISK=""; NAME=""; YES=0; CLEANUP=0
 REGION=${AWS_REGION:-${AWS_DEFAULT_REGION:-}}
 REPO_URL=${REPO_URL:-https://github.com/Zwernemann/LinuxServerMigration.git}
 REPO_BRANCH=${REPO_BRANCH:-$(git -C "$(dirname "$0")" rev-parse --abbrev-ref HEAD 2>/dev/null || echo main)}
 ROLE=LinuxServerMigrationRole
 
-usage() { sed -n '2,38p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+usage() { sed -n '2,42p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 while [[ $# -gt 0 ]]; do
     case "$1" in
     --old-instance | -i) OLD=$2; shift 2 ;;
+    --new-instance) NEWARG=$2; shift 2 ;;
     --instance-type) TYPE=$2; shift 2 ;;
     --disk-size) DISK=$2; shift 2 ;;
     --name) NAME=$2; shift 2 ;;
@@ -88,7 +92,9 @@ ssm_run() { # ssm_run <instance-id> <skript>
             --query StandardOutputContent --output text; return 0 ;;
         Failed | Cancelled | TimedOut | Undeliverable | Terminated)
             aws ssm get-command-invocation --command-id "$id" --instance-id "$1" \
-                --query StandardErrorContent --output text >&2 || true
+                --query StandardOutputContent --output text 2>/dev/null | tail -n 20 >&2 || true
+            aws ssm get-command-invocation --command-id "$id" --instance-id "$1" \
+                --query StandardErrorContent --output text 2>/dev/null | tail -n 20 >&2 || true
             return 1 ;;
         esac
         sleep 5
@@ -147,10 +153,53 @@ if [[ $CLEANUP == 1 ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-NEW=$(aws ec2 describe-instances --filters "Name=tag:linuxservermigration,Values=$OLD" \
-    "Name=instance-state-name,Values=pending,running,stopping,stopped" \
-    --query 'Reservations[0].Instances[0].InstanceId' --output text)
-none "$NEW" && NEW=""
+if [[ -n "$NEWARG" ]]; then
+    NEW=$NEWARG
+    read -r NEWVPC NEWPROFILE <<<"$(aws ec2 describe-instances --instance-ids "$NEW" \
+        --query 'Reservations[0].Instances[0].[VpcId,IamInstanceProfile.Arn]' --output text)" ||
+        die "Instanz $NEW nicht gefunden."
+    [[ "$NEWVPC" == "$VPC" ]] || die "Der neue Server $NEW liegt in einem anderen VPC ($NEWVPC) als der alte ($VPC)."
+else
+    NEW=$(aws ec2 describe-instances --filters "Name=tag:linuxservermigration,Values=$OLD" \
+        "Name=instance-state-name,Values=pending,running,stopping,stopped" \
+        --query 'Reservations[0].Instances[0].InstanceId' --output text)
+    none "$NEW" && NEW=""
+    NEWPROFILE=managed
+fi
+
+# IAM-Rolle (Session Manager + Elastic IP umhängen)
+ensure_role() {
+    say "IAM-Rolle $ROLE"
+    local part
+    part=$(aws sts get-caller-identity --query Arn --output text | cut -d: -f2)
+    if aws iam get-instance-profile --instance-profile-name "$ROLE" >/dev/null 2>&1; then
+        info "vorhanden"
+        return 0
+    fi
+    aws iam create-role --role-name "$ROLE" --description "LinuxServerMigration: Session Manager + Elastic IP" \
+        --assume-role-policy-document '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"ec2.amazonaws.com"},"Action":"sts:AssumeRole"}]}' >/dev/null
+    aws iam attach-role-policy --role-name "$ROLE" --policy-arn "arn:$part:iam::aws:policy/AmazonSSMManagedInstanceCore"
+    aws iam put-role-policy --role-name "$ROLE" --policy-name elastic-ip-cutover \
+        --policy-document '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["ec2:AssociateAddress","ec2:DescribeAddresses","ec2:DescribeInstances"],"Resource":"*"}]}'
+    aws iam create-instance-profile --instance-profile-name "$ROLE" >/dev/null
+    aws iam add-role-to-instance-profile --instance-profile-name "$ROLE" --role-name "$ROLE"
+    info "angelegt"
+}
+
+# Security Group für den neuen Server + SSH-Freigabe beim alten
+ensure_sg() {
+    say "Security Groups"
+    MIGSG=$(aws ec2 describe-security-groups --filters "Name=group-name,Values=$MIGSG_NAME" "Name=vpc-id,Values=$VPC" \
+        --query 'SecurityGroups[0].GroupId' --output text)
+    if none "$MIGSG"; then
+        MIGSG=$(aws ec2 create-security-group --group-name "$MIGSG_NAME" --vpc-id "$VPC" \
+            --description "LinuxServerMigration: neuer Server darf per SSH auf $OLD" --query GroupId --output text)
+    fi
+    aws ec2 authorize-security-group-ingress --group-id "${OLDSGS[0]}" \
+        --ip-permissions "IpProtocol=tcp,FromPort=22,ToPort=22,UserIdGroupPairs=[{GroupId=$MIGSG,Description=LinuxServerMigration}]" \
+        >/dev/null 2>&1 || true
+    info "$MIGSG_NAME ($MIGSG); SSH-Freigabe in ${OLDSGS[0]}"
+}
 
 if [[ -z "$NEW" ]]; then
     # Instanztyp: ältere Generationen auf die aktuelle heben (gleiche Größe)
@@ -184,96 +233,70 @@ if [[ -z "$NEW" ]]; then
     info "Kosten: der neue Server läuft parallel zum alten (Preis siehe EC2-Preisliste für $TYPE)."
     ask "Neuen Server so anlegen?" || die "Abgebrochen."
 
-    # IAM-Rolle
-    say "IAM-Rolle $ROLE"
-    PART=$(aws sts get-caller-identity --query Arn --output text | cut -d: -f2)
-    if ! aws iam get-instance-profile --instance-profile-name "$ROLE" >/dev/null 2>&1; then
-        aws iam create-role --role-name "$ROLE" --description "LinuxServerMigration: Session Manager + Elastic IP" \
-            --assume-role-policy-document '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"ec2.amazonaws.com"},"Action":"sts:AssumeRole"}]}' >/dev/null
-        aws iam attach-role-policy --role-name "$ROLE" --policy-arn "arn:$PART:iam::aws:policy/AmazonSSMManagedInstanceCore"
-        aws iam put-role-policy --role-name "$ROLE" --policy-name elastic-ip-cutover \
-            --policy-document '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["ec2:AssociateAddress","ec2:DescribeAddresses","ec2:DescribeInstances"],"Resource":"*"}]}'
-        aws iam create-instance-profile --instance-profile-name "$ROLE" >/dev/null
-        aws iam add-role-to-instance-profile --instance-profile-name "$ROLE" --role-name "$ROLE"
-        info "angelegt"
-    else
-        info "vorhanden"
-    fi
-
-    # Security Group für den neuen Server + SSH-Freigabe beim alten
-    say "Security Groups"
-    MIGSG=$(aws ec2 describe-security-groups --filters "Name=group-name,Values=$MIGSG_NAME" "Name=vpc-id,Values=$VPC" \
-        --query 'SecurityGroups[0].GroupId' --output text)
-    if none "$MIGSG"; then
-        MIGSG=$(aws ec2 create-security-group --group-name "$MIGSG_NAME" --vpc-id "$VPC" \
-            --description "LinuxServerMigration: neuer Server darf per SSH auf $OLD" --query GroupId --output text)
-    fi
-    aws ec2 authorize-security-group-ingress --group-id "${OLDSGS[0]}" \
-        --ip-permissions "IpProtocol=tcp,FromPort=22,ToPort=22,UserIdGroupPairs=[{GroupId=$MIGSG,Description=LinuxServerMigration}]" \
-        >/dev/null 2>&1 || true
-    info "$MIGSG_NAME ($MIGSG); SSH-Freigabe in ${OLDSGS[0]}"
-
-    # Erster Start des neuen Servers: Tool + Schlüssel + Konfiguration
-    UD=$(mktemp)
-    cat >"$UD" <<EOF
-#!/bin/bash
-exec >/var/log/linuxservermigration-setup.log 2>&1
-set -x
-dnf -y install git tmux rsync
-git clone -b '$REPO_BRANCH' '$REPO_URL' /opt/linuxservermigration
-install -d -m 700 /root/.ssh
-[ -f /root/.ssh/migration_key ] || ssh-keygen -q -t ed25519 -N '' -C linuxservermigration -f /root/.ssh/migration_key
-cd /opt/linuxservermigration
-umask 077
-cat >migration.conf <<'CONF'
-# Vorbelegt von aws/provision-target.sh – alle Optionen: migration.conf.example
-SRC_HOST="$PRIV"
-SRC_SSH_USER="ec2-user"
-SRC_SSH_KEY="/root/.ssh/migration_key"
-# MySQL-root-Passwort des alten Servers (leer = /root/.my.cnf dort verwenden)
-SRC_DB_PASS=""
-TARGET_PHP_VERSION="8.3"
-TARGET_DB_ENGINE="mariadb"
-AWS_REGION="$REGION"
-SRC_INSTANCE_ID="$OLD"
-ELASTIC_IP_ALLOCATION_ID="$EIP"
-CONF
-touch /var/lib/linuxservermigration-ready
-EOF
+    ensure_role
+    ensure_sg
     say "Starte neuen Server"
     args=(--image-id "$AMI" --instance-type "$TYPE" --subnet-id "$SUBNET"
         --security-group-ids "${OLDSGS[@]}" "$MIGSG"
         --iam-instance-profile "Name=$ROLE"
         --block-device-mappings "DeviceName=/dev/xvda,Ebs={VolumeSize=$DISK,VolumeType=gp3,Encrypted=true}"
         --metadata-options "HttpTokens=required,HttpPutResponseHopLimit=2"
-        --user-data "file://$UD"
         --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=$NAME},{Key=linuxservermigration,Value=$OLD}]"
         --query 'Instances[0].InstanceId' --output text)
     none "$KEY" || args+=(--key-name "$KEY")
     none "$PUB" || args+=(--associate-public-ip-address)
     # Neue IAM-Rollen brauchen einige Sekunden, bis EC2 sie kennt
+    err=$(mktemp)
     for i in $(seq 1 12); do
-        if NEW=$(aws ec2 run-instances "${args[@]}" 2>"$UD.err"); then break; fi
-        grep -q 'iamInstanceProfile' "$UD.err" || { cat "$UD.err" >&2; die "Start fehlgeschlagen."; }
+        if NEW=$(aws ec2 run-instances "${args[@]}" 2>"$err"); then break; fi
+        grep -q 'iamInstanceProfile' "$err" || { cat "$err" >&2; die "Start fehlgeschlagen."; }
         [[ $i -lt 12 ]] || die "IAM-Rolle wird von EC2 nicht gefunden."
         sleep 10
     done
-    rm -f "$UD" "$UD.err"
+    rm -f "$err"
     info "Instanz $NEW gestartet"
 else
-    say "Neuer Server existiert bereits: $NEW"
+    say "Neuer Server: $NEW"
+    ensure_role
+    ensure_sg
+    if [[ -n "$NEWARG" ]]; then
+        aws ec2 create-tags --resources "$NEW" --tags "Key=linuxservermigration,Value=$OLD"
+        read -ra NEWSGS <<<"$(aws ec2 describe-instances --instance-ids "$NEW" \
+            --query 'Reservations[0].Instances[0].SecurityGroups[].GroupId' --output text)"
+        if [[ " ${NEWSGS[*]} " != *" $MIGSG "* ]]; then
+            aws ec2 modify-instance-attribute --instance-id "$NEW" --groups "${NEWSGS[@]}" "$MIGSG"
+            info "Security Group $MIGSG_NAME zum neuen Server hinzugefügt"
+        fi
+        if none "$NEWPROFILE"; then
+            aws ec2 associate-iam-instance-profile --instance-id "$NEW" --iam-instance-profile "Name=$ROLE" >/dev/null
+            info "Rolle $ROLE dem neuen Server zugewiesen"
+        elif [[ "$NEWPROFILE" != *"/$ROLE" ]]; then
+            info "Der neue Server hat schon eine eigene IAM-Rolle – für 'cutover' mit Elastic IP braucht sie ec2:AssociateAddress."
+        fi
+    fi
 fi
 
 aws ec2 wait instance-running --instance-ids "$NEW"
 read -r NEWPRIV NEWPUB <<<"$(aws ec2 describe-instances --instance-ids "$NEW" \
     --query 'Reservations[0].Instances[0].[PrivateIpAddress,PublicIpAddress]' --output text)"
 
-say "Warte auf den neuen Server (Session Manager, Installation des Tools) – ca. 2-4 Minuten"
-wait_ssm "$NEW" 600 || die "Neuer Server meldet sich nicht beim Session Manager. Hat das Subnetz Internetzugang (Internet- oder NAT-Gateway)?"
-PUBKEY=$(ssm_run "$NEW" 'for i in $(seq 1 60); do [ -f /var/lib/linuxservermigration-ready ] && break; sleep 5; done
-cat /root/.ssh/migration_key.pub') || die "Einrichtung des neuen Servers fehlgeschlagen – Log: /var/log/linuxservermigration-setup.log"
-PUBKEY=$(tr -d '\r\n' <<<"$PUBKEY")
-[[ "$PUBKEY" == ssh-ed25519* ]] || die "Kein SSH-Schlüssel auf dem neuen Server gefunden (Log: /var/log/linuxservermigration-setup.log)."
+say "Warte, bis sich der neue Server beim Session Manager meldet (ca. 1-3 Minuten)"
+wait_ssm "$NEW" 600 || die "Neuer Server meldet sich nicht beim Session Manager. Hat das Subnetz Internetzugang (Internet- oder NAT-Gateway)? Läuft er mit der Rolle $ROLE?"
+
+say "Installiere das Migrations-Tool auf dem neuen Server"
+BOOT="set -e
+exec 2>&1
+command -v git >/dev/null || dnf -y -q install git
+if [ -d /opt/linuxservermigration/.git ]; then
+  git -C /opt/linuxservermigration pull -q --ff-only || echo 'Hinweis: git pull nicht möglich, vorhandene Version bleibt'
+else
+  git clone -q -b '$REPO_BRANCH' '$REPO_URL' /opt/linuxservermigration
+fi
+bash /opt/linuxservermigration/aws/setup-target.sh --src-host '$PRIV' --src-instance '$OLD' --region '$REGION' --eip '$EIP'"
+OUT=$(ssm_run "$NEW" "$BOOT") || die "Einrichtung des neuen Servers fehlgeschlagen (Ausgabe siehe oben)."
+PUBKEY=$(sed -n 's/^PUBKEY=//p' <<<"$OUT" | tr -d '\r' | tail -n 1)
+[[ "$PUBKEY" == ssh-ed25519* ]] || { echo "$OUT" | tail -n 20 >&2; die "Kein SSH-Schlüssel auf dem neuen Server gefunden."; }
+info "Tool installiert: /opt/linuxservermigration"
 
 # ---------------------------------------------------------------------------
 say "Zugang vom neuen zum alten Server"

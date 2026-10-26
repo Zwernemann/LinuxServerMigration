@@ -56,6 +56,9 @@ Das Skript zeigt zuerst an, was es vorhat, und fragt nach. Danach:
   ist gleich groß, aus der aktuellen Generation (z.B. `t2.small` → `t3.small`).
 - Der neue Server bekommt eine Rolle für den **Session Manager**. Damit
   meldest du dich später im Browser an, ganz ohne Schlüsseldatei.
+- Über den Session Manager installiert das Skript auf dem neuen Server das
+  Tool nach `/opt/linuxservermigration`, außerdem `tmux`. Die Ausgabe siehst
+  du direkt in der CloudShell.
 - Der alte Server erlaubt SSH-Zugriffe vom neuen Server, aber **nur** von
   diesem.
 - Ist der alte Server noch nicht beim Session Manager angemeldet, fragt das
@@ -211,6 +214,39 @@ Das startet den alten Server wieder und hängt die Elastic IP zurück.
    ```
 
 ---
+
+## Problem: `tmux` oder `/opt/linuxservermigration` fehlt
+
+Dann ist die Einrichtung des neuen Servers nicht vollständig durchgelaufen.
+Zwei Wege, es nachzuholen:
+
+**a) In der CloudShell** das Skript einfach noch einmal ausführen. Es erkennt
+den vorhandenen neuen Server und holt die Einrichtung nach:
+
+```bash
+cd LinuxServerMigration && git pull
+bash aws/provision-target.sh --old-instance i-0abc123def4567890
+```
+
+Hast du den neuen Server selbst angelegt, gib ihn zusätzlich mit
+`--new-instance i-…` an.
+
+**b) Direkt auf dem neuen Server** (private IP des alten Servers einsetzen):
+
+```bash
+sudo -i
+dnf -y install git
+git clone https://github.com/Zwernemann/LinuxServerMigration.git /opt/linuxservermigration
+/opt/linuxservermigration/aws/setup-target.sh --src-host 172.30.0.12
+```
+
+Am Ende wird der Befehl `echo 'ssh-ed25519 …' >> ~/.ssh/authorized_keys`
+angezeigt. Ihn einmal auf dem **alten** Server ausführen (siehe nächster
+Abschnitt).
+
+Schlägt schon `dnf install` fehl, hat der neue Server keinen Internetzugang.
+Dann in der EC2-Konsole prüfen, ob er eine öffentliche IP hat bzw. ob sein
+Subnetz über ein Internet- oder NAT-Gateway verfügt.
 
 ## Zugang zum alten Server
 
