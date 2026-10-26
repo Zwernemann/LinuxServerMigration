@@ -17,7 +17,7 @@ phase_configure() {
     step "Dienste neu starten"
     run systemctl restart php-fpm
     run systemctl restart httpd
-    run systemctl restart crond
+    cron_service
 }
 
 # ---------------------------------------------------------------------------

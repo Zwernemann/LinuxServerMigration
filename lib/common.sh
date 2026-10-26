@@ -155,6 +155,23 @@ install_generated() {
 }
 
 # ---------------------------------------------------------------------------
+# cron auf dem Ziel erst nach dem Cutover (sonst laufen Jobs doppelt)
+cron_allowed() {
+    is_yes "${CRON_BEFORE_CUTOVER:-no}" || [[ -f "$WORK_DIR/cutover.done" ]]
+}
+
+cron_service() {
+    if cron_allowed; then
+        run systemctl enable crond
+        run systemctl restart crond
+    else
+        run systemctl enable crond
+        run systemctl stop crond
+        log "cron ist bis zum Cutover pausiert (Jobs liefen sonst doppelt auf altem und neuem Server)."
+    fi
+}
+
+# ---------------------------------------------------------------------------
 # Datenbank auf dem Ziel
 # ---------------------------------------------------------------------------
 TARGET_MY_CNF=/root/.my.cnf

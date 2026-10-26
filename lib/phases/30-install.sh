@@ -139,7 +139,7 @@ phase_install() {
 
     step "Dienste aktivieren"
     run systemctl enable --now php-fpm
-    run systemctl enable --now crond
+    cron_service
     run systemctl enable httpd   # Start erst nach der Konfiguration
 }
 

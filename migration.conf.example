@@ -100,6 +100,9 @@ PHP_LINT="yes"
 CERTBOT_SETUP="yes"
 # Zusätzliche Pakete für den neuen Server (z.B. "mc htop")
 EXTRA_PACKAGES=""
+# Cronjobs auf dem neuen Server erst beim Cutover starten. Sonst laufen sie
+# doppelt (alter + neuer Server), z.B. Erinnerungsmails an Kunden.
+CRON_BEFORE_CUTOVER="no"
 # Mailserver installieren (auto = wenn auf der Quelle sendmail/postfix lief)
 INSTALL_MTA="auto"
 
