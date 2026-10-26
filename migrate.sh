@@ -80,6 +80,9 @@ for p in "${expanded[@]}"; do
 done
 for p in "${expanded[@]}"; do
     CURRENT_PHASE=$p
+    # Alte Warnungen dieser Phase ersetzen
+    awk -F'\t' -v p="$p" '$2 != p' "$WORK_DIR/warnings.log" >"$WORK_DIR/warnings.log.tmp" &&
+        mv -f "$WORK_DIR/warnings.log.tmp" "$WORK_DIR/warnings.log"
     start=$SECONDS
     step "Phase: $p"
     "phase_$p"

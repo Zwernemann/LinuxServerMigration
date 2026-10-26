@@ -118,6 +118,17 @@ cat >/etc/httpd/conf.d/example.conf <<'CONF'
 </VirtualHost>
 CONF
 echo '*/5 * * * * php /var/www/example/index.php >/dev/null' >/var/spool/cron/webdev
+cat >/etc/httpd/conf.d/second.conf <<'CONF'
+<VirtualHost *:80>
+    ServerName second.test
+    DocumentRoot /var/www/html
+</VirtualHost>
+CONF
+# Zertifikate per acme.sh (Attrappe) wie auf echten Servern
+mkdir -p /root/.acme.sh/example.test
+printf '#!/bin/sh\necho "Main_Domain  example.test"\n' >/root/.acme.sh/acme.sh && chmod +x /root/.acme.sh/acme.sh
+echo "Le_ReloadCmd='service httpd force-reload'" >/root/.acme.sh/example.test/example.test.conf
+echo '44 0 * * * "/root/.acme.sh"/acme.sh --cron --home "/root/.acme.sh" > /dev/null' >/var/spool/cron/root
 mkdir -p /run/php-fpm && php-fpm -D && httpd -k start
 mysql -uroot -p'srcR00t!' 2>/dev/null <<'SQL'
 CREATE DATABASE shop;
@@ -144,7 +155,7 @@ SRC_DB_PASS='srcR00t!'
 DB_USER_EXCLUDE="root mysql.sys mysql.session mysql.infoschema"
 TARGET_DB_ENGINE="mysql84"
 TARGET_PHP_VERSION="8.0"
-CERTBOT_SETUP="no"
+CERTBOT_SETUP="yes"
 WEB_PATHS="/var/www /srv/leer"
 PHP_LINT="yes"
 CONF
@@ -175,6 +186,10 @@ t "Restdatei .php3_notUsed gesperrt"        '[ "$(curl -s -o /dev/null -w %{http
 t "secret.txt gesperrt"                     '[ "$(curl -s -o /dev/null -w %{http_code} -H "Host: example.test" http://127.0.0.1/secret.txt)" = 403 ]'
 t ".user.ini gesperrt"                      '[ "$(curl -s -o /dev/null -w %{http_code} -H "Host: example.test" http://127.0.0.1/.user.ini)" = 403 ]'
 t "Bericht erstellt"                        'grep -q "## Ergebnis" /var/lib/server-migration/report.md'
+t "HTTP-Prüfung für alle Websites"          'grep -q "second.test" /var/lib/server-migration/report.md && grep -q "example.test" /var/lib/server-migration/report.md'
+t "acme.sh übernommen"                      '[ -x /root/.acme.sh/acme.sh ] && grep -q acme.sh /var/spool/cron/root'
+t "acme.sh-Reload-Befehl gemeldet"          'grep -q "service httpd force-reload" /var/lib/server-migration/warnings.log'
+t "kein certbot neben acme.sh"              '[ ! -e /etc/cron.d/certbot-renew ]'
 t "keine Abbrüche im Log"                   '! grep -h "Abbruch in Zeile" /var/log/server-migration/*.log'
 t "Zweiter Lauf (idempotent)"               '/opt/migration/migrate.sh -y files database configure'
 docker exec "$TGT" sed -n '/## Ergebnis/,/## Warnungen/p' /var/lib/server-migration/report.md

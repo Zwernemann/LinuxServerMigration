@@ -12,7 +12,7 @@ phase_configure() {
     configure_apache
     is_yes "$MIGRATE_CRON" && configure_cron
     configure_logrotate
-    is_yes "$CERTBOT_SETUP" && [[ -d /etc/letsencrypt/renewal ]] && configure_certbot
+    configure_acme
 
     step "Dienste neu starten"
     run systemctl restart php-fpm
@@ -324,6 +324,45 @@ configure_logrotate() {
 }
 
 # ---------------------------------------------------------------------------
+# Zertifikatserneuerung: so wie auf der Quelle (acme.sh oder certbot)
+configure_acme() {
+    local crons acmesh=0 certbot=0
+    crons=$(cat "$(snap /var/spool/cron)"/* "$(snap /etc/cron.d)"/* 2>/dev/null | grep -v '^[[:space:]]*#' || true)
+    grep -q 'acme\.sh' <<<"$crons" && acmesh=1
+    grep -q 'certbot\|letsencrypt-auto' <<<"$crons" && certbot=1
+    if [[ $acmesh == 1 ]]; then
+        configure_acmesh
+    fi
+    if is_yes "$CERTBOT_SETUP" && [[ -d /etc/letsencrypt/renewal ]] && { [[ $certbot == 1 ]] || [[ $acmesh == 0 ]]; }; then
+        configure_certbot
+    elif [[ $acmesh == 1 && -d /etc/letsencrypt/renewal ]]; then
+        log "Zertifikate werden mit acme.sh erneuert – certbot wird nicht eingerichtet."
+    fi
+}
+
+configure_acmesh() {
+    step "acme.sh"
+    local home=/root/.acme.sh f cmd
+    if [[ ! -x "$home/acme.sh" ]]; then
+        warn "acme.sh wird auf der Quelle per Cron verwendet, aber $home fehlt auf dem Ziel – Phase 'files' ausführen"
+        return 0
+    fi
+    pkg_install socat openssl curl 2>/dev/null || true
+    "$home/acme.sh" --list --home "$home" 2>&1 | sed 's/^/    /' | tee -a "$LOG_FILE" >&2 || true
+    # Reload-Befehle wie "service httpd reload" gibt es auf AL2023 nicht
+    for f in "$home"/*/*.conf; do
+        [[ -f "$f" ]] || continue
+        cmd=$(sed -n "s/^Le_ReloadCmd='\(.*\)'$/\1/p" "$f")
+        if [[ "$cmd" == __ACME_BASE64__START_* ]]; then
+            cmd=${cmd#__ACME_BASE64__START_}
+            cmd=$(base64 -d <<<"${cmd%__ACME_BASE64__END_}" 2>/dev/null || true)
+        fi
+        if [[ "$cmd" == *service* || "$cmd" == */etc/init.d/* || "$cmd" == *apachectl* && "$cmd" != *systemctl* ]]; then
+            warn "acme.sh ($(basename "$(dirname "$f")")): Reload-Befehl '$cmd' – auf AL2023 'systemctl reload httpd' verwenden"
+        fi
+    done
+}
+
 configure_certbot() {
     step "Let's Encrypt / certbot"
     if ! command -v certbot >/dev/null 2>&1; then

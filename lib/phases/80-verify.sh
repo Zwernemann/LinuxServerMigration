@@ -103,7 +103,7 @@ verify_http() {
             url="$scheme://$name:$port$path"
             t=$(curl -sk --noproxy '*' -o "$res/body" -w '%{http_code} %{size_download}' --max-time 30 \
                 --resolve "$name:$port:127.0.0.1" "$url" || echo "000 0")
-            s=$(src_ssh "curl -sk --noproxy '*' -o /dev/null -w '%{http_code} %{size_download}' --max-time 30 --resolve '$name:$port:127.0.0.1' '$url'" 2>/dev/null || echo "000 0")
+            s=$(src_ssh "curl -sk --noproxy '*' -o /dev/null -w '%{http_code} %{size_download}' --max-time 30 --resolve '$name:$port:127.0.0.1' '$url'" 2>/dev/null </dev/null || echo "000 0")
             printf '%s\t%s\t%s\n' "$url" "$s" "$t" >>"$res/http.tsv"
             if head -c 2000 "$res/body" 2>/dev/null | grep -q '<?php'; then
                 "$check_fn" FEHLER HTTP "$url liefert PHP-Quelltext aus – PHP-FPM-Handler fehlt!"

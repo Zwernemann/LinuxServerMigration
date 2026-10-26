@@ -22,7 +22,7 @@ phase_inventory() {
     log "Hole Konfigurations-Schnappschuss ..."
     mkdir -p "$(snap /)"
     # shellcheck disable=SC2086,SC2116  # echo: Zeilenumbrüche -> Leerzeichen
-    existing=$(src_ssh "for p in $(echo $SNAPSHOT_PATHS); do if [ -d \"\$p\" ]; then echo \"d:\$p\"; elif [ -e \"\$p\" ]; then echo \"f:\$p\"; fi; done" || true)
+    existing=$(src_ssh "sudo -n sh -c 'for p in $(echo $SNAPSHOT_PATHS); do if [ -d \"\$p\" ]; then echo \"d:\$p\"; elif [ -e \"\$p\" ]; then echo \"f:\$p\"; fi; done'" || true)
     for p in $existing; do
         if [[ "$p" == d:* ]]; then
             p=${p#d:}
