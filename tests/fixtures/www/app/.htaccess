@@ -1,0 +1,14 @@
+RewriteEngine On
+RewriteRule ^(.*)$ index.php?q=$1 [L,QSA]
+php_value upload_max_filesize 32M
+php_value post_max_size "40M"
+php_flag register_globals off
+php_flag short_open_tag on
+<IfModule mod_php5.c>
+    php_value max_execution_time 120
+    php_value include_path ".:/var/www/app/lib"
+</IfModule>
+<Files "config.php">
+    Order allow,deny
+    Deny from all
+</Files>

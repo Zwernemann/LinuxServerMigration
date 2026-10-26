@@ -1,0 +1,119 @@
+# =============================================================================
+#  Konfiguration für LinuxServerMigration
+#  Amazon Linux AMI 2018.03  ──►  Amazon Linux 2023
+#
+#  Kopieren nach  migration.conf  und anpassen:
+#      cp migration.conf.example migration.conf
+#  Die Datei ist ein Bash-Fragment (KEY="wert").
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Quellserver (alter Amazon Linux 2018.03)
+# ---------------------------------------------------------------------------
+# Am besten die PRIVATE IP verwenden – die Elastic IP wird beim Cutover
+# eventuell auf den neuen Server umgehängt.
+SRC_HOST="10.0.1.23"
+SRC_SSH_USER="ec2-user"
+SRC_SSH_PORT="22"
+# Private Key, mit dem sich der NEUE Server (als root) beim alten anmeldet.
+SRC_SSH_KEY="/root/.ssh/migration_key"
+
+# ---------------------------------------------------------------------------
+# Datenbank auf dem Quellserver
+# ---------------------------------------------------------------------------
+MIGRATE_DATABASE="yes"          # "no", wenn die DB z.B. schon in RDS liegt
+SRC_DB_HOST="localhost"
+SRC_DB_USER="root"
+# Leer lassen = /root/.my.cnf auf dem Quellserver verwenden
+SRC_DB_PASS=""
+# Nur diese Datenbanken migrieren (leer = alle außer den Systemdatenbanken)
+DB_INCLUDE=""
+# Diese Datenbanken nie migrieren
+DB_EXCLUDE="information_schema performance_schema mysql sys"
+# MySQL-Benutzer, die nicht übernommen werden
+DB_USER_EXCLUDE="root mysql.sys mysql.session mysql.infoschema debian-sys-maint rdsadmin"
+
+# ---------------------------------------------------------------------------
+# Zielserver (neuer Amazon Linux 2023 – hier läuft das Skript)
+# ---------------------------------------------------------------------------
+# PHP-Version auf AL2023: 8.2 | 8.3 | 8.4  (je nach AL2023-Release)
+TARGET_PHP_VERSION="8.3"
+
+# Datenbank-Server auf dem Ziel:
+#   mariadb  – MariaDB aus den AL2023-Repos (empfohlen, keine Fremdrepos,
+#              nimmt MySQL-5.x-Dumps und Passwort-Hashes problemlos an)
+#   mysql84  – MySQL Community 8.4 LTS aus dem offiziellen Oracle-Repo
+TARGET_DB_ENGINE="mariadb"
+MYSQL84_REPO_RPM="https://dev.mysql.com/get/mysql84-community-release-el9-1.noarch.rpm"
+
+# root-Passwort der neuen Datenbank.
+# Leer = gleiches Passwort wie SRC_DB_PASS (falls SRC_DB_USER=root),
+#        sonst wird eines erzeugt. Es landet in /root/.my.cnf.
+TARGET_DB_ROOT_PASS=""
+
+# ---------------------------------------------------------------------------
+# Dateien
+# ---------------------------------------------------------------------------
+# Web-Verzeichnisse (DocumentRoots aus der Apache-Konfiguration werden
+# automatisch ergänzt)
+WEB_PATHS="/var/www"
+# Weitere Pfade, die 1:1 übernommen werden (ohne --delete)
+EXTRA_PATHS=""
+# Ausschlüsse für rsync (Muster, durch Leerzeichen getrennt)
+RSYNC_EXCLUDES="*.swp .git/index.lock"
+# Dateien, die auf der Quelle gelöscht wurden, auch auf dem Ziel löschen
+FILES_DELETE="yes"
+# /home übernehmen (ohne /home/ec2-user/.ssh – die Schlüssel des neuen
+# Servers bleiben erhalten)
+MIGRATE_HOME_DIRS="yes"
+# Lokale Linux-Benutzer/Gruppen (UID >= 500) übernehmen
+MIGRATE_USERS="yes"
+# Crontabs und eigene Dateien in /etc/cron.* übernehmen
+MIGRATE_CRON="yes"
+
+# ---------------------------------------------------------------------------
+# Apache / PHP
+# ---------------------------------------------------------------------------
+# Apache-2.2-Zugriffsregeln (Order/Allow/Deny) nach 2.4 (Require) umschreiben
+APACHE_CONVERT_ACCESS="yes"
+# php_value/php_flag aus .htaccess und VirtualHosts nach .user.ini verschieben
+# (nötig, weil AL2023 PHP über PHP-FPM ausführt – php_value führt dort zu
+# "500 Internal Server Error")
+PHP_DIRECTIVES_TO_USERINI="yes"
+# php.ini-Werte, die von der Quelle übernommen werden
+PHP_INI_KEYS="memory_limit upload_max_filesize post_max_size max_execution_time max_input_time max_input_vars max_file_uploads date.timezone short_open_tag display_errors display_startup_errors error_reporting log_errors html_errors output_buffering default_charset allow_url_fopen allow_url_include file_uploads expose_php disable_functions auto_prepend_file auto_append_file include_path open_basedir default_socket_timeout session.gc_maxlifetime session.cookie_lifetime session.cookie_httponly session.cookie_secure session.use_strict_mode zlib.output_compression mysqli.default_host mysqli.default_user mbstring.language mbstring.internal_encoding"
+# Fehlende PHP-Erweiterungen (redis, apcu, zip, …) per PECL kompilieren
+PECL_AUTO="yes"
+# Alle *.php-Dateien nach der Migration mit "php -l" auf Syntaxfehler prüfen
+PHP_LINT="yes"
+# Let's-Encrypt-Zertifikate übernehmen und certbot einrichten (falls vorhanden)
+CERTBOT_SETUP="yes"
+# Mailserver installieren (auto = wenn auf der Quelle sendmail/postfix lief)
+INSTALL_MTA="auto"
+
+# ---------------------------------------------------------------------------
+# Prüfung
+# ---------------------------------------------------------------------------
+# Zeilenzahlen aller Tabellen vergleichen (bei sehr großen DBs ggf. "no")
+VERIFY_ROW_COUNTS="yes"
+# Zusätzliche URLs, die geprüft werden (Pfad wird an jeden ServerName gehängt)
+VERIFY_URL_PATHS="/"
+
+# ---------------------------------------------------------------------------
+# Cutover (Umschalten)
+# ---------------------------------------------------------------------------
+# Apache und cron auf der Quelle während der finalen Synchronisation stoppen,
+# damit keine Daten mehr geschrieben werden.
+CUTOVER_STOP_SOURCE="yes"
+# Elastic IP automatisch vom alten auf den neuen Server umhängen
+# (benötigt aws-cli + IAM-Rechte ec2:AssociateAddress auf dem neuen Server)
+ELASTIC_IP_ALLOCATION_ID=""
+AWS_REGION=""
+# Instance-ID des alten Servers (nur für "rollback" der Elastic IP nötig)
+SRC_INSTANCE_ID=""
+
+# ---------------------------------------------------------------------------
+# Sonstiges
+# ---------------------------------------------------------------------------
+WORK_DIR="/var/lib/server-migration"
+LOG_DIR="/var/log/server-migration"
