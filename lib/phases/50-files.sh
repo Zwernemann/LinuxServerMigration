@@ -13,7 +13,7 @@ web_paths() {
             [[ "${k,,}" == documentroot && -n "$p" ]] && all+=("${p%/}")
         done <"$(inv_file httpd-paths.tsv)"
     fi
-    mapfile -t all < <(printf '%s\n' "${all[@]}" | sed 's:/*$::' | grep -v '^$' | sort -u)
+    mapfile -t all < <(printf '%s\n' "${all[@]}" | sed 's:/*$::' | { grep -v '^$' || true; } | sort -u)
     for p in "${all[@]}"; do
         skip=0
         for q in "${all[@]}"; do
@@ -108,13 +108,13 @@ webroot_adjust() {
             while IFS= read -r -d '' f; do
                 "$TOOL_DIR/tools/php-to-userini.sh" htaccess "$f" 2>>"$WORK_DIR/htaccess.log" || true
             done < <(find "$p" -name .htaccess -type f -print0 2>/dev/null |
-                xargs -0 -r grep -lZiE '^[[:space:]]*php_(admin_)?(value|flag)[[:space:]]' 2>/dev/null)
+                xargs -0 -r grep -lZiE '^[[:space:]]*php_(admin_)?(value|flag)[[:space:]]' 2>/dev/null || true)
         fi
         if is_yes "$APACHE_CONVERT_ACCESS"; then
             while IFS= read -r -d '' f; do
                 "$TOOL_DIR/tools/apache24-convert.sh" -i "$f" 2>>"$WORK_DIR/htaccess.log" || true
             done < <(find "$p" -name .htaccess -type f -print0 2>/dev/null |
-                xargs -0 -r grep -lZiE '^[[:space:]]*(order|allow[[:space:]]+from|deny[[:space:]]+from)[[:space:]]' 2>/dev/null)
+                xargs -0 -r grep -lZiE '^[[:space:]]*(order|allow[[:space:]]+from|deny[[:space:]]+from)[[:space:]]' 2>/dev/null || true)
         fi
     done
     if [[ -s "$WORK_DIR/htaccess.log" ]]; then

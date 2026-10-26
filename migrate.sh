@@ -61,7 +61,10 @@ for f in "$TOOL_DIR"/lib/phases/*.sh; do
     source "$f"
 done
 
-trap 'die "Abbruch in Zeile $LINENO (Phase ${CURRENT_PHASE:-?}): $BASH_COMMAND"' ERR
+# Nur in der Haupt-Shell abbrechen: In Prozess-/Befehlsersetzungen ist z.B.
+# ein grep ohne Treffer kein Fehler – schlägt dort wirklich etwas fehl,
+# bemerkt es die Haupt-Shell am Ergebnis.
+trap '(( BASH_SUBSHELL )) || die "Abbruch in Zeile $LINENO (Phase ${CURRENT_PHASE:-?}): $BASH_COMMAND"' ERR
 
 ALL_PHASES=(preflight inventory install users files database configure verify)
 expanded=()

@@ -104,6 +104,8 @@ mysql_select_db('shop', $l);
 echo 'legacy=', mysql_num_rows(mysql_query('SELECT * FROM kunden'));
 PHP
 cp /var/www/example/legacy.php3 /var/www/example/legacy.php3_notUsed
+# Zweites Webverzeichnis ohne .htaccess und ohne mysql_* (Suchen ohne Treffer)
+mkdir -p /srv/leer && echo '<?php echo 1;' >/srv/leer/index.php
 chown -R webdev:webteam /var/www/example
 cat >/etc/httpd/conf.d/example.conf <<'CONF'
 <VirtualHost *:80>
@@ -143,6 +145,7 @@ DB_USER_EXCLUDE="root mysql.sys mysql.session mysql.infoschema"
 TARGET_DB_ENGINE="mysql84"
 TARGET_PHP_VERSION="8.0"
 CERTBOT_SETUP="no"
+WEB_PATHS="/var/www /srv/leer"
 PHP_LINT="yes"
 CONF
 EOF
@@ -172,6 +175,7 @@ t "Restdatei .php3_notUsed gesperrt"        '[ "$(curl -s -o /dev/null -w %{http
 t "secret.txt gesperrt"                     '[ "$(curl -s -o /dev/null -w %{http_code} -H "Host: example.test" http://127.0.0.1/secret.txt)" = 403 ]'
 t ".user.ini gesperrt"                      '[ "$(curl -s -o /dev/null -w %{http_code} -H "Host: example.test" http://127.0.0.1/.user.ini)" = 403 ]'
 t "Bericht erstellt"                        'grep -q "## Ergebnis" /var/lib/server-migration/report.md'
+t "keine Abbrüche im Log"                   '! grep -h "Abbruch in Zeile" /var/log/server-migration/*.log'
 t "Zweiter Lauf (idempotent)"               '/opt/migration/migrate.sh -y files database configure'
 docker exec "$TGT" sed -n '/## Ergebnis/,/## Warnungen/p' /var/lib/server-migration/report.md
 [[ $fail == 0 ]] && echo "== E2E OK"

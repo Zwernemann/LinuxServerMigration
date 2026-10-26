@@ -262,8 +262,8 @@ configure_mysql_shim() {
     if [[ "$mode" == auto ]]; then
         while IFS= read -r p; do
             [[ -d "$p" ]] || continue
-            n=$((n + $(grep -rlE --include='*.php*' --include='*.phtml' --include='*.inc' \
-                '\bmysql_[a-z_]+[[:space:]]*\(' "$p" 2>/dev/null | wc -l)))
+            n=$((n + $({ grep -rlE --include='*.php*' --include='*.phtml' --include='*.inc' \
+                '\bmysql_[a-z_]+[[:space:]]*\(' "$p" 2>/dev/null || true; } | wc -l)))
         done < <(web_paths)
         [[ $n -gt 0 ]] || return 0
     fi
