@@ -1,0 +1,3 @@
+# Bewusst: Ausdrücke in einfachen Anführungszeichen (PHP-/Remote-Code) und
+# clientseitige Expansion bei ssh-Aufrufen; Variablen aus migration.conf.
+disable=SC2016,SC2029,SC2153
