@@ -84,10 +84,22 @@ PHP_DIRECTIVES_TO_USERINI="yes"
 PHP_INI_KEYS="memory_limit upload_max_filesize post_max_size max_execution_time max_input_time max_input_vars max_file_uploads date.timezone short_open_tag display_errors display_startup_errors error_reporting log_errors html_errors output_buffering default_charset allow_url_fopen allow_url_include file_uploads expose_php disable_functions auto_prepend_file auto_append_file include_path open_basedir default_socket_timeout session.gc_maxlifetime session.cookie_lifetime session.cookie_httponly session.cookie_secure session.use_strict_mode zlib.output_compression mysqli.default_host mysqli.default_user mbstring.language mbstring.internal_encoding"
 # Fehlende PHP-Erweiterungen (redis, apcu, zip, …) per PECL kompilieren
 PECL_AUTO="yes"
+# Alten Code mit mysql_*-Funktionen (in PHP 7 entfernt) unverändert weiter
+# betreiben: Kompatibilitätsschicht per auto_prepend_file laden
+#   auto = nur wenn der Code mysql_* verwendet
+PHP_MYSQL_SHIM="auto"
+# .php3/.php4/.php5/.phtml-Dateien wie .php ausführen (statt sie als Text
+# auszuliefern – inklusive Passwörtern im Quelltext)
+PHP_LEGACY_EXTENSIONS="auto"
+# Backup-/Restdateien wie datei.php.bak, datei.php3_notUsed, *.inc, *.sql
+# für den Webzugriff sperren (würden sonst als Text ausgeliefert)
+DENY_BACKUP_FILES="yes"
 # Alle *.php-Dateien nach der Migration mit "php -l" auf Syntaxfehler prüfen
 PHP_LINT="yes"
 # Let's-Encrypt-Zertifikate übernehmen und certbot einrichten (falls vorhanden)
 CERTBOT_SETUP="yes"
+# Zusätzliche Pakete für den neuen Server (z.B. "mc htop")
+EXTRA_PACKAGES=""
 # Mailserver installieren (auto = wenn auf der Quelle sendmail/postfix lief)
 INSTALL_MTA="auto"
 

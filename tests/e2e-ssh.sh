@@ -96,6 +96,14 @@ cat >/var/www/example/.htaccess <<'HT'
 </Files>
 HT
 echo geheim >/var/www/example/secret.txt
+# Alter Code: mysql_*-Funktionen, Endung .php3 und eine liegengebliebene Kopie
+cat >/var/www/example/legacy.php3 <<'PHP'
+<?php
+$l = mysql_connect('localhost', 'shopuser', 'geheim1');
+mysql_select_db('shop', $l);
+echo 'legacy=', mysql_num_rows(mysql_query('SELECT * FROM kunden'));
+PHP
+cp /var/www/example/legacy.php3 /var/www/example/legacy.php3_notUsed
 chown -R webdev:webteam /var/www/example
 cat >/etc/httpd/conf.d/example.conf <<'CONF'
 <VirtualHost *:80>
@@ -159,6 +167,8 @@ t "Crontab übernommen"                      'grep -q index.php /var/spool/cron/
 t "Datenbank übertragen"                    'mysql -N -e "SELECT COUNT(*) FROM shop.kunden" | grep -qx 3'
 t "MySQL-Benutzer mit altem Passwort"       'mysql -ushopuser -pgeheim1 -N -e "SELECT 1" shop'
 t "Website liefert Daten aus der DB"        'curl -s -H "Host: example.test" http://127.0.0.1/ | grep -q "kunden=3 upload=48M"'
+t ".php3 mit mysql_* läuft unter PHP 8"     'curl -s -H "Host: example.test" http://127.0.0.1/legacy.php3 | grep -qx "legacy=3"'
+t "Restdatei .php3_notUsed gesperrt"        '[ "$(curl -s -o /dev/null -w %{http_code} -H "Host: example.test" http://127.0.0.1/legacy.php3_notUsed)" = 403 ]'
 t "secret.txt gesperrt"                     '[ "$(curl -s -o /dev/null -w %{http_code} -H "Host: example.test" http://127.0.0.1/secret.txt)" = 403 ]'
 t ".user.ini gesperrt"                      '[ "$(curl -s -o /dev/null -w %{http_code} -H "Host: example.test" http://127.0.0.1/.user.ini)" = 403 ]'
 t "Bericht erstellt"                        'grep -q "## Ergebnis" /var/lib/server-migration/report.md'

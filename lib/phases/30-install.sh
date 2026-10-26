@@ -57,6 +57,13 @@ phase_install() {
 
     step "Basis-Pakete"
     pkg_install httpd mod_ssl cronie rsync tar gzip logrotate openssl findutils which procps-ng
+    if [[ -n "${EXTRA_PACKAGES// /}" ]]; then
+        local extra=()
+        for p in $EXTRA_PACKAGES; do
+            if pkg_available "$p"; then extra+=("$p"); else warn "Zusatzpaket '$p' ist in AL2023 nicht verfügbar"; fi
+        done
+        pkg_install "${extra[@]}"
+    fi
 
     step "PHP $v"
     if ! pkg_available "php$v"; then
