@@ -37,6 +37,23 @@ phase_preflight() {
         src_ssh 'sudo -n yum -y -q install rsync' || die "rsync konnte auf der Quelle nicht installiert werden."
     fi
 
+    if is_yes "$MIGRATE_DATABASE"; then
+        log "Teste MySQL-Zugang auf der Quelle ..."
+        local sv tmp
+        mapfile -t sv < <(src_vars)
+        tmp=$(mktemp)
+        echo 'mysql_setup; q "SELECT CURRENT_USER()" >&2' >"$tmp"
+        if ! src_run "${sv[@]}" -- "$tmp" 2>>"$LOG_FILE"; then
+            rm -f "$tmp"
+            die "Anmeldung an MySQL auf der Quelle als '$SRC_DB_USER' fehlgeschlagen.
+    -> In migration.conf SRC_DB_PASS (MySQL-root-Passwort des alten Servers) eintragen.
+    -> Liegt die Datenbank z.B. in RDS, MIGRATE_DATABASE=\"no\" setzen.
+    Hilfe zum Finden des Passworts: docs/ANLEITUNG.md, Abschnitt 'MySQL-Passwort'."
+        fi
+        rm -f "$tmp"
+        log "MySQL-Zugang OK."
+    fi
+
     log "Freier Speicher auf dem Ziel:"
     df -hP / /var 2>/dev/null | tee -a "$LOG_FILE" >&2 || true
     log "Preflight OK."

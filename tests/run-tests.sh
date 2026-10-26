@@ -19,7 +19,7 @@ reject() {
 
 echo "== shellcheck"
 if command -v shellcheck >/dev/null; then
-    if shellcheck -x -s bash migrate.sh lib/common.sh lib/phases/*.sh remote/*.sh tools/*.sh tests/*.sh; then ok shellcheck; else nok shellcheck; fi
+    if shellcheck -x -s bash migrate.sh lib/common.sh lib/phases/*.sh remote/*.sh tools/*.sh tests/*.sh aws/*.sh; then ok shellcheck; else nok shellcheck; fi
 else echo "  (shellcheck nicht installiert – übersprungen)"; fi
 
 echo "== Apache 2.2 -> 2.4 Zugriffsregeln"

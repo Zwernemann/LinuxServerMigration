@@ -35,12 +35,34 @@ für einen Rückweg unverändert.
 
 ## Schnellstart
 
-### 1. Neuen Server anlegen
+> **Ausführliche Anleitung für Einsteiger:** [docs/ANLEITUNG.md](docs/ANLEITUNG.md).
+> Sie erklärt Schritt für Schritt, wer was macht, wie du auf die Server
+> kommst und wo das MySQL-Passwort steht.
+
+### Empfohlen: alles aus der AWS CloudShell
+
+```bash
+# AWS-Konsole -> CloudShell-Symbol >_ (Region des alten Servers)
+git clone https://github.com/Zwernemann/LinuxServerMigration.git
+cd LinuxServerMigration
+bash aws/provision-target.sh --old-instance i-0abc123def4567890
+```
+
+Das Skript legt den neuen AL2023-Server neben dem alten an (gleiches
+Netzwerk, gleiche Security Groups, gleiches Schlüsselpaar) und installiert
+das Tool. Außerdem richtet es den SSH-Zugang zum alten Server ein und
+erstellt die `migration.conf` vor. Danach geht es mit
+[Schritt 4](#4-migration-durchführen-der-alte-server-läuft-weiter) weiter;
+am neuen Server meldest du dich im Browser über den Session Manager an.
+
+### Manuell
+
+#### 1. Neuen Server anlegen
 
 Eine EC2-Instanz mit **Amazon Linux 2023** im selben VPC starten. In der
 Security Group des **alten** Servers SSH (Port 22) vom neuen Server erlauben.
 
-### 2. SSH-Zugang vom neuen zum alten Server
+#### 2. SSH-Zugang vom neuen zum alten Server
 
 Auf dem **neuen** Server:
 
@@ -58,7 +80,7 @@ echo 'ssh-ed25519 AAAA... root@neu' >> ~/.ssh/authorized_keys
 `ec2-user` braucht auf der Quelle `sudo` ohne Passwort. Das ist bei Amazon
 Linux Standard; `preflight` prüft es und sagt, was zu tun ist, falls nicht.
 
-### 3. Tool holen und konfigurieren
+#### 3. Tool holen und konfigurieren
 
 ```bash
 sudo dnf -y install git
