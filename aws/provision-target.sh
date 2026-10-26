@@ -23,6 +23,7 @@
 #
 #  Optionen:
 #    --old-instance ID   Instance-ID des alten Servers (Pflicht)
+#    --src-ssh-port P    SSH-Port des alten Servers (Standard: 22)
 #    --instance-type T   Instanztyp des neuen Servers (Standard: wie alt,
 #                        t2/m4/c4/r4 werden auf die aktuelle Generation gehoben)
 #    --disk-size GB      Größe der Systemplatte (Standard: Summe der Platten
@@ -39,17 +40,18 @@
 # =============================================================================
 set -euo pipefail
 
-OLD=""; NEWARG=""; TYPE=""; DISK=""; NAME=""; YES=0; CLEANUP=0
+OLD=""; NEWARG=""; SRCPORT=22; TYPE=""; DISK=""; NAME=""; YES=0; CLEANUP=0
 REGION=${AWS_REGION:-${AWS_DEFAULT_REGION:-}}
 REPO_URL=${REPO_URL:-https://github.com/Zwernemann/LinuxServerMigration.git}
 REPO_BRANCH=${REPO_BRANCH:-$(git -C "$(dirname "$0")" rev-parse --abbrev-ref HEAD 2>/dev/null || echo main)}
 ROLE=LinuxServerMigrationRole
 
-usage() { sed -n '2,42p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+usage() { sed -n '2,43p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 while [[ $# -gt 0 ]]; do
     case "$1" in
     --old-instance | -i) OLD=$2; shift 2 ;;
     --new-instance) NEWARG=$2; shift 2 ;;
+    --src-ssh-port) SRCPORT=$2; shift 2 ;;
     --instance-type) TYPE=$2; shift 2 ;;
     --disk-size) DISK=$2; shift 2 ;;
     --name) NAME=$2; shift 2 ;;
@@ -136,7 +138,7 @@ if [[ $CLEANUP == 1 ]]; then
         --query 'SecurityGroups[0].GroupId' --output text)
     if ! none "$MIGSG"; then
         if aws ec2 revoke-security-group-ingress --group-id "${OLDSGS[0]}" \
-            --ip-permissions "IpProtocol=tcp,FromPort=22,ToPort=22,UserIdGroupPairs=[{GroupId=$MIGSG}]" >/dev/null 2>&1; then
+            --ip-permissions "IpProtocol=tcp,FromPort=$SRCPORT,ToPort=$SRCPORT,UserIdGroupPairs=[{GroupId=$MIGSG}]" >/dev/null 2>&1; then
             info "SSH-Freigabe in ${OLDSGS[0]} entfernt"
         else
             info "SSH-Freigabe war schon entfernt"
@@ -196,7 +198,7 @@ ensure_sg() {
             --description "LinuxServerMigration: neuer Server darf per SSH auf $OLD" --query GroupId --output text)
     fi
     aws ec2 authorize-security-group-ingress --group-id "${OLDSGS[0]}" \
-        --ip-permissions "IpProtocol=tcp,FromPort=22,ToPort=22,UserIdGroupPairs=[{GroupId=$MIGSG,Description=LinuxServerMigration}]" \
+        --ip-permissions "IpProtocol=tcp,FromPort=$SRCPORT,ToPort=$SRCPORT,UserIdGroupPairs=[{GroupId=$MIGSG,Description=LinuxServerMigration}]" \
         >/dev/null 2>&1 || true
     info "$MIGSG_NAME ($MIGSG); SSH-Freigabe in ${OLDSGS[0]}"
 }
@@ -228,7 +230,7 @@ if [[ -z "$NEW" ]]; then
     info "Subnetz: $SUBNET (wie alt)   Security Groups: ${OLDSGS[*]} + $MIGSG_NAME"
     info "Schlüsselpaar: ${KEY/None/keins – Zugang nur über Session Manager}"
     info "Tool: $REPO_URL (Branch $REPO_BRANCH) -> /opt/linuxservermigration"
-    info "Beim alten Server wird SSH (Port 22) von $MIGSG_NAME erlaubt."
+    info "Beim alten Server wird SSH (Port $SRCPORT) von $MIGSG_NAME erlaubt."
     echo >&2
     info "Kosten: der neue Server läuft parallel zum alten (Preis siehe EC2-Preisliste für $TYPE)."
     ask "Neuen Server so anlegen?" || die "Abgebrochen."
@@ -292,7 +294,7 @@ if [ -d /opt/linuxservermigration/.git ]; then
 else
   git clone -q -b '$REPO_BRANCH' '$REPO_URL' /opt/linuxservermigration
 fi
-bash /opt/linuxservermigration/aws/setup-target.sh --src-host '$PRIV' --src-instance '$OLD' --region '$REGION' --eip '$EIP'"
+bash /opt/linuxservermigration/aws/setup-target.sh --src-host '$PRIV' --src-port '$SRCPORT' --src-instance '$OLD' --region '$REGION' --eip '$EIP'"
 OUT=$(ssm_run "$NEW" "$BOOT") || die "Einrichtung des neuen Servers fehlgeschlagen (Ausgabe siehe oben)."
 PUBKEY=$(sed -n 's/^PUBKEY=//p' <<<"$OUT" | tr -d '\r' | tail -n 1)
 [[ "$PUBKEY" == ssh-ed25519* ]] || { echo "$OUT" | tail -n 20 >&2; die "Kein SSH-Schlüssel auf dem neuen Server gefunden."; }
@@ -329,7 +331,7 @@ if [[ $done_key == 0 ]]; then
     cat >&2 <<EOF
 
     Bitte EINMAL auf dem ALTEN Server ausführen (Anmeldung wie gewohnt, z.B.
-    ssh -i ihr-schluessel.pem ec2-user@${PUB/None/$PRIV}):
+    ssh -p $SRCPORT -i ihr-schluessel.pem ec2-user@${PUB/None/$PRIV}):
 
       echo '$PUBKEY' >> ~/.ssh/authorized_keys
 

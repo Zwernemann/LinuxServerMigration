@@ -12,6 +12,7 @@
 #
 #  Optionen:
 #    --src-host IP        PRIVATE IP des alten Servers
+#    --src-port PORT      SSH-Port des alten Servers (Standard: 22)
 #    --src-instance ID    Instance-ID des alten Servers (für rollback)
 #    --region R           AWS-Region
 #    --eip ALLOC          Allocation-ID der Elastic IP (für cutover)
@@ -21,14 +22,15 @@
 # =============================================================================
 set -euo pipefail
 
-SRC_HOST=""; SRC_INSTANCE=""; REGION=""; EIP=""
+SRC_HOST=""; SRC_PORT=22; SRC_INSTANCE=""; REGION=""; EIP=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
     --src-host) SRC_HOST=$2; shift 2 ;;
+    --src-port) SRC_PORT=$2; shift 2 ;;
     --src-instance) SRC_INSTANCE=$2; shift 2 ;;
     --region) REGION=$2; shift 2 ;;
     --eip) EIP=$2; shift 2 ;;
-    -h | --help) sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h | --help) sed -n '2,23p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "Unbekannte Option: $1" >&2; exit 2 ;;
     esac
 done
@@ -70,6 +72,7 @@ if [[ ! -f "$CONF" ]]; then
 # Vorbelegt von aws/setup-target.sh – alle Optionen: migration.conf.example
 SRC_HOST="$SRC_HOST"
 SRC_SSH_USER="ec2-user"
+SRC_SSH_PORT="$SRC_PORT"
 SRC_SSH_KEY="$KEY"
 # MySQL-root-Passwort des alten Servers (leer = /root/.my.cnf dort verwenden)
 SRC_DB_PASS=""
