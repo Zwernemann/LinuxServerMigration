@@ -7,7 +7,7 @@ php_module_map() {
     case "$1" in
     core | date | filter | hash | json | libxml | openssl | pcre | reflection | session | spl | standard | \
         zlib | ctype | curl | exif | fileinfo | ftp | gettext | iconv | phar | sockets | tokenizer | \
-        calendar | bz2 | readline | mhash | random | cgi-fcgi | zend\ opcache | apache2handler)
+        calendar | bz2 | readline | mhash | random | cgi-fcgi | zend\ opcache | apache2handler | pcntl)
         [[ "$1" == "zend opcache" ]] && echo pkg:opcache || echo builtin ;;
     mysqli | mysqlnd | pdo_mysql) echo pkg:mysqlnd ;;
     pdo | pdo_sqlite | sqlite3) echo pkg:pdo ;;

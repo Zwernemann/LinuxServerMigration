@@ -166,7 +166,7 @@ configure_apache() {
         local m missing=()
         while read -r m; do
             case "$m" in
-            php5_module | php7_module | php_module | authz_default_module | authn_alias_module | \
+            mpm_*_module | php5_module | php7_module | php_module | authz_default_module | authn_alias_module | \
                 disk_cache_module | mem_cache_module | ident_module | version_module | \
                 authn_default_module | cern_meta_module | asis_module | dumpio_module | \
                 substitute_module | suexec_module | cgi_module | cgid_module | usertrack_module) continue ;;
