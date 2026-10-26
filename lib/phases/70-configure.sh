@@ -27,11 +27,20 @@ configure_php() {
     src_tsv=$(inv_file php-ini.tsv)
     tgt_tsv="$WORK_DIR/gen/php-ini-target.tsv"
     gen="$WORK_DIR/gen/99-migrated.ini"
-    PHP_INI_KEYS=$PHP_INI_KEYS php -r '
+    # Standardwerte des Ziels OHNE die vom Tool selbst geschriebenen ini-Dateien
+    # (sonst hält ein zweiter Lauf die eigenen Einstellungen für Unterschiede)
+    local scandir
+    scandir=$(mktemp -d)
+    for f in /etc/php.d/*.ini; do
+        case "$(basename "$f")" in 95-mysql-compat.ini | 99-migrated.ini | 90-migrated-*) continue ;; esac
+        ln -s "$f" "$scandir/"
+    done
+    PHP_INI_SCAN_DIR=$scandir PHP_INI_KEYS=$PHP_INI_KEYS php -r '
         foreach (preg_split("/\s+/", getenv("PHP_INI_KEYS"), -1, PREG_SPLIT_NO_EMPTY) as $k) {
             $v = ini_get($k);
             if ($v !== false) { echo $k, "\t", $v, "\n"; }
         }' >"$tgt_tsv"
+    rm -rf "${scandir:?}"
     tz=$(inv_get SRC_TIMEZONE)
     {
         echo "; Automatisch erzeugt durch LinuxServerMigration"
@@ -342,25 +351,14 @@ configure_acme() {
 
 configure_acmesh() {
     step "acme.sh"
-    local home=/root/.acme.sh f cmd
+    local home=/root/.acme.sh
     if [[ ! -x "$home/acme.sh" ]]; then
         warn "acme.sh wird auf der Quelle per Cron verwendet, aber $home fehlt auf dem Ziel – Phase 'files' ausführen"
         return 0
     fi
-    pkg_install socat openssl curl 2>/dev/null || true
+    pkg_install socat openssl 2>/dev/null || true  # curl: curl-minimal ist vorhanden
     "$home/acme.sh" --list --home "$home" 2>&1 | sed 's/^/    /' | tee -a "$LOG_FILE" >&2 || true
-    # Reload-Befehle wie "service httpd reload" gibt es auf AL2023 nicht
-    for f in "$home"/*/*.conf; do
-        [[ -f "$f" ]] || continue
-        cmd=$(sed -n "s/^Le_ReloadCmd='\(.*\)'$/\1/p" "$f")
-        if [[ "$cmd" == __ACME_BASE64__START_* ]]; then
-            cmd=${cmd#__ACME_BASE64__START_}
-            cmd=$(base64 -d <<<"${cmd%__ACME_BASE64__END_}" 2>/dev/null || true)
-        fi
-        if [[ "$cmd" == *service* || "$cmd" == */etc/init.d/* || "$cmd" == *apachectl* && "$cmd" != *systemctl* ]]; then
-            warn "acme.sh ($(basename "$(dirname "$f")")): Reload-Befehl '$cmd' – auf AL2023 'systemctl reload httpd' verwenden"
-        fi
-    done
+    acmesh_adjust
 }
 
 configure_certbot() {

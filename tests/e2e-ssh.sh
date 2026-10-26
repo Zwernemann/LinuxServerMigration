@@ -188,10 +188,12 @@ t ".user.ini gesperrt"                      '[ "$(curl -s -o /dev/null -w %{http
 t "Bericht erstellt"                        'grep -q "## Ergebnis" /var/lib/server-migration/report.md'
 t "HTTP-Prüfung für alle Websites"          'grep -q "second.test" /var/lib/server-migration/report.md && grep -q "example.test" /var/lib/server-migration/report.md'
 t "acme.sh übernommen"                      '[ -x /root/.acme.sh/acme.sh ] && grep -q acme.sh /var/spool/cron/root'
-t "acme.sh-Reload-Befehl gemeldet"          'grep -q "service httpd force-reload" /var/lib/server-migration/warnings.log'
+t "acme.sh-Reload-Befehl umgestellt"        'grep -qx "Le_ReloadCmd=.systemctl reload httpd." /root/.acme.sh/example.test/example.test.conf'
 t "kein certbot neben acme.sh"              '[ ! -e /etc/cron.d/certbot-renew ]'
 t "keine Abbrüche im Log"                   '! grep -h "Abbruch in Zeile" /var/log/server-migration/*.log'
 t "Zweiter Lauf (idempotent)"               '/opt/migration/migrate.sh -y files database configure'
+t "mysql_* auch nach zweitem Lauf aktiv"    'curl -s -H "Host: example.test" http://127.0.0.1/legacy.php3 | grep -qx "legacy=3"'
+t "keine auto_prepend-Kollision"            '! grep -q "^auto_prepend_file" /etc/php.d/99-migrated.ini'
 docker exec "$TGT" sed -n '/## Ergebnis/,/## Warnungen/p' /var/lib/server-migration/report.md
 [[ $fail == 0 ]] && echo "== E2E OK"
 exit $fail

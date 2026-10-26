@@ -78,6 +78,7 @@ phase_files() {
 
     step "Anpassungen im Webverzeichnis"
     webroot_adjust
+    acmesh_adjust
     php_compat_scan
 }
 
@@ -95,6 +96,30 @@ sync_dir() {
         die "rsync fehlgeschlagen (Code $rc): ${*: -2:1}"
     fi
     rm -f "$out"
+}
+
+# acme.sh: Reload-Befehle mit "service"/Init-Skripten gibt es auf AL2023 nicht
+# mehr – auf systemctl umstellen. Läuft nach jedem Sync, weil rsync die
+# Einstellungen der Quelle zurückkopiert.
+acmesh_adjust() {
+    local f cmd new
+    for f in /root/.acme.sh/*/*.conf; do
+        [[ -f "$f" ]] || continue
+        cmd=$(sed -n "s/^Le_ReloadCmd='\(.*\)'$/\1/p" "$f")
+        if [[ "$cmd" == __ACME_BASE64__START_* ]]; then
+            cmd=${cmd#__ACME_BASE64__START_}
+            cmd=$(base64 -d <<<"${cmd%__ACME_BASE64__END_}" 2>/dev/null || true)
+        fi
+        [[ -n "$cmd" ]] || continue
+        new=$(sed -E 's#(/sbin/|/usr/sbin/)?service[[:space:]]+httpd[[:space:]]+(restart|reload|force-reload|graceful)#systemctl reload httpd#g;
+                      s#/etc/init\.d/httpd[[:space:]]+(restart|reload|force-reload|graceful)#systemctl reload httpd#g' <<<"$cmd")
+        if [[ "$new" != "$cmd" ]]; then
+            sed -i "s|^Le_ReloadCmd=.*|Le_ReloadCmd='$new'|" "$f"
+            log "acme.sh ($(basename "$(dirname "$f")")): Reload-Befehl '$cmd' -> '$new'"
+        elif [[ "$cmd" == *service* || "$cmd" == */etc/init.d/* ]]; then
+            warn "acme.sh ($(basename "$(dirname "$f")")): Reload-Befehl '$cmd' bitte auf systemctl umstellen"
+        fi
+    done
 }
 
 # .htaccess an PHP-FPM und Apache 2.4 anpassen. Muss nach jedem Sync laufen,
