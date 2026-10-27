@@ -7,7 +7,7 @@ php_module_map() {
     case "$1" in
     core | date | filter | hash | json | libxml | openssl | pcre | reflection | session | spl | standard | \
         zlib | ctype | curl | exif | fileinfo | ftp | gettext | iconv | phar | sockets | tokenizer | \
-        calendar | bz2 | readline | mhash | random | cgi-fcgi | zend\ opcache | apache2handler)
+        calendar | bz2 | readline | mhash | random | cgi-fcgi | zend\ opcache | apache2handler | pcntl)
         [[ "$1" == "zend opcache" ]] && echo pkg:opcache || echo builtin ;;
     mysqli | mysqlnd | pdo_mysql) echo pkg:mysqlnd ;;
     pdo | pdo_sqlite | sqlite3) echo pkg:pdo ;;
@@ -57,6 +57,13 @@ phase_install() {
 
     step "Basis-Pakete"
     pkg_install httpd mod_ssl cronie rsync tar gzip logrotate openssl findutils which procps-ng
+    if [[ -n "${EXTRA_PACKAGES// /}" ]]; then
+        local extra=()
+        for p in $EXTRA_PACKAGES; do
+            if pkg_available "$p"; then extra+=("$p"); else warn "Zusatzpaket '$p' ist in AL2023 nicht verfügbar"; fi
+        done
+        pkg_install "${extra[@]}"
+    fi
 
     step "PHP $v"
     if ! pkg_available "php$v"; then
@@ -116,7 +123,9 @@ phase_install() {
     mta=$(inv_get SRC_MTA)
     if [[ "$INSTALL_MTA" == yes || ("$INSTALL_MTA" == auto && "$mta" != none && -n "$mta") ]]; then
         pkg_install postfix
+        configure_postfix
         run systemctl enable --now postfix
+        run systemctl restart postfix
     else
         log "Kein Mailserver (Quelle: ${mta:-?}, INSTALL_MTA=$INSTALL_MTA)."
     fi
@@ -130,8 +139,23 @@ phase_install() {
 
     step "Dienste aktivieren"
     run systemctl enable --now php-fpm
-    run systemctl enable --now crond
+    cron_service
     run systemctl enable httpd   # Start erst nach der Konfiguration
+}
+
+# postfix wie den alten Mailserver auftreten lassen: gleicher Hostname im
+# HELO/Absender, und nur IPv4 – EC2-IPv6-Adressen haben meist kein
+# Reverse-DNS, große Anbieter (z.B. Microsoft 365) lehnen das ab.
+configure_postfix() {
+    local host
+    host=$(inv_get SRC_HOSTNAME)
+    run postconf -e "inet_protocols = ipv4"
+    if [[ "$host" == *.* ]]; then
+        run postconf -e "myhostname = $host"
+    else
+        warn "postfix: Hostname der Quelle unbekannt – myhostname bitte manuell setzen (postconf -e myhostname=...)"
+    fi
+    log "postfix: Ausgehende Mails gehen direkt über Port 25. Falls Mails nicht ankommen: AWS blockiert Port 25 standardmäßig (Freigabe beantragen oder Amazon SES als Relay nutzen)."
 }
 
 install_pecl() {

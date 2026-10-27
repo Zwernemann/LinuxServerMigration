@@ -1,7 +1,8 @@
 # LinuxServerMigration
 
-Vollautomatischer Umzug eines **Amazon Linux AMI 2018.03**-Servers mit
-**Apache, PHP und MySQL** auf **Amazon Linux 2023**.
+Vollautomatischer Umzug eines **Amazon Linux AMI 2018.03**- oder
+**Amazon Linux 2**-Servers mit **Apache, PHP und MySQL/MariaDB** auf
+**Amazon Linux 2023**.
 
 Das Skript läuft auf dem **neuen** Server, holt sich per SSH und rsync alles
 vom alten Server und baut die Umgebung dort neu auf. Der alte Server wird
@@ -9,7 +10,7 @@ dabei nur gelesen. Es wird also kein In-Place-Upgrade gemacht, und er bleibt
 für einen Rückweg unverändert.
 
 ```
- alter Server (AL 2018.03)                neuer Server (AL2023)
+ alter Server (AL 2018.03 / AL2)          neuer Server (AL2023)
  ┌──────────────────────────┐   SSH/rsync  ┌──────────────────────────────┐
  │ Apache 2.2/2.4 + mod_php │ ───────────► │ Apache 2.4 + PHP-FPM 8.x     │
  │ PHP 5.x / 7.x            │              │ MariaDB 10.x / MySQL 8.4     │
@@ -17,6 +18,23 @@ für einen Rückweg unverändert.
  └──────────────────────────┘              └──────────────────────────────┘
                                 ./migrate.sh all  →  ./migrate.sh cutover
 ```
+
+## Unterstützte Quellsysteme
+
+| Quelle | Hinweise |
+|---|---|
+| **Amazon Linux AMI 2018.03** | SysV-Init, MySQL 5.5–5.7, PHP 5.x/7.x, Apache 2.2 oder 2.4. |
+| **Amazon Linux 2** | systemd, MariaDB 5.5/10.x (`amazon-linux-extras`) oder MySQL 5.7/8.0. PHP aus `amazon-linux-extras` oder den Remi-Repos, auch als Software Collection unter `/opt/remi/phpXX`. Systembenutzer (UID < 1000) werden erkannt und nicht übernommen. Der SSM-Agent ist vorinstalliert, deshalb klappt die Einrichtung mit `provision-target.sh` meist vollautomatisch. |
+
+Grenzen:
+- **MySQL 8.0 als Quelle:** Mit `TARGET_DB_ENGINE="auto"` (Standard) wird
+  automatisch **MySQL 8.4 LTS** installiert und nicht MariaDB. MariaDB kennt
+  MySQL-8-Kollationen wie `utf8mb4_0900_ai_ci` und
+  `caching_sha2_password`-Konten nicht. Nach MySQL 8.4 werden alle Konten
+  1:1 mit ihrem Passwort-Hash übernommen (getestet in `tests/db-mysql8.sh`).
+- **PHP-Version:** AL2023 bietet PHP 8.2, 8.3 und 8.4. PHP 8.2 bekommt nur
+  noch bis Ende 2026 Sicherheitsupdates; für neue Umzüge ist **8.3 oder 8.4**
+  die bessere Wahl (`TARGET_PHP_VERSION`).
 
 ## Was automatisch passiert
 
@@ -27,6 +45,7 @@ für einen Rückweg unverändert.
 | **Datenbank** | Jede Datenbank wird mit `mysqldump` exportiert, inklusive Routinen, Triggern, Events und Views. MySQL-Benutzer kommen **mit ihren bisherigen Passwort-Hashes** mit, Anwendungen brauchen also keine neuen Zugangsdaten. Übernommen werden auch Rechte, `sql_mode`, Zeichensatz und `max_allowed_packet`. Am Ende werden die Zeilenzahlen aller Tabellen verglichen. |
 | **Apache** | VirtualHosts, `<Directory>`-Blöcke, SSL-VHosts und zusätzliche Ports werden übernommen. **2.2→2.4:** `Order/Allow/Deny` wird zu `Require`, `NameVirtualHost`, `SSLMutex` und die SSLv2-Einstellungen fallen weg. Danach läuft ein Konfigurationstest. |
 | **PHP-FPM** | `php_value`/`php_flag` aus VirtualHosts und `.htaccess` würden unter PHP-FPM einen *500-Fehler* verursachen. Sie werden deshalb in `.user.ini` verschoben, und `.user.ini` wird für den Webzugriff gesperrt. Werte aus der alten php.ini landen in `/etc/php.d/99-migrated.ini`. |
+| **Alter Code** | Code, der noch `mysql_*` verwendet (in PHP 7 entfernt), läuft über eine mitgelieferte Kompatibilitätsschicht auf mysqli-Basis unverändert weiter (`tools/mysql-compat.php`). Dateien mit `.php3`/`.php4`/`.php5`/`.phtml` werden weiter von PHP ausgeführt. Liegengebliebene Kopien wie `x.php.bak`, `x.php3_notUsed`, `*.inc` oder `*.sql` würden als Text ausgeliefert, mitsamt Passwörtern; sie werden für den Webzugriff gesperrt. |
 | **PHP 8** | Der Code wird nach Funktionen durchsucht, die es nicht mehr gibt (`mysql_*`, `ereg`, `each()`, `create_function`, `$str{0}` …). Zusätzlich prüft `php -l` alle Dateien auf Syntaxfehler. |
 | **Dateien** | Webverzeichnisse und alle DocumentRoots, `/home`, SSL-Zertifikate und `/etc/letsencrypt` werden kopiert. Beim Cutover werden nur noch die Änderungen übertragen. |
 | **System** | Linux-Benutzer und Gruppen werden mit UID/GID und Passwort übernommen, dazu Crontabs, eigene `/etc/cron.d`- und logrotate-Dateien sowie die Zeitzone. Läuft auf der Quelle ein Mailserver, wird postfix installiert. certbot wird eingerichtet. |

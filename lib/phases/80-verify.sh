@@ -19,9 +19,16 @@ phase_verify() {
 
     step "Dienste"
     local svc
-    for svc in httpd php-fpm crond $(is_yes "$MIGRATE_DATABASE" && db_service); do
+    for svc in httpd php-fpm $(is_yes "$MIGRATE_DATABASE" && db_service); do
         if systemctl is-active -q "$svc"; then check OK Dienst "$svc läuft"; else check FEHLER Dienst "$svc läuft nicht"; fi
     done
+    if cron_allowed; then
+        if systemctl is-active -q crond; then check OK Dienst "crond läuft"; else check FEHLER Dienst "crond läuft nicht"; fi
+    elif systemctl is-active -q crond; then
+        check WARNUNG Dienst "crond läuft schon vor dem Cutover – Cronjobs laufen doppelt (systemctl stop crond)"
+    else
+        check OK Dienst "crond bis zum Cutover pausiert"
+    fi
     if apachectl configtest >/dev/null 2>&1; then check OK Apache "Konfigurationstest"; else check FEHLER Apache "Konfigurationstest fehlgeschlagen"; fi
 
     step "Dateien"
@@ -103,7 +110,7 @@ verify_http() {
             url="$scheme://$name:$port$path"
             t=$(curl -sk --noproxy '*' -o "$res/body" -w '%{http_code} %{size_download}' --max-time 30 \
                 --resolve "$name:$port:127.0.0.1" "$url" || echo "000 0")
-            s=$(src_ssh "curl -sk --noproxy '*' -o /dev/null -w '%{http_code} %{size_download}' --max-time 30 --resolve '$name:$port:127.0.0.1' '$url'" 2>/dev/null || echo "000 0")
+            s=$(src_ssh "curl -sk --noproxy '*' -o /dev/null -w '%{http_code} %{size_download}' --max-time 30 --resolve '$name:$port:127.0.0.1' '$url'" 2>/dev/null </dev/null || echo "000 0")
             printf '%s\t%s\t%s\n' "$url" "$s" "$t" >>"$res/http.tsv"
             if head -c 2000 "$res/body" 2>/dev/null | grep -q '<?php'; then
                 "$check_fn" FEHLER HTTP "$url liefert PHP-Quelltext aus – PHP-FPM-Handler fehlt!"

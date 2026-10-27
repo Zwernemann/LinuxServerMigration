@@ -67,8 +67,8 @@ start_box "$SRC" 'srcR00t!'
 docker exec -i "$SRC" bash -e <<'EOF'
 ssh-keygen -A >/dev/null
 useradd -m -u 500 ec2-user
-useradd -m -u 501 webdev
-groupadd -g 510 webteam
+useradd -m -u 1501 webdev
+groupadd -g 1510 webteam
 usermod -aG webteam webdev
 usermod -aG webteam ec2-user
 echo 'webdev:$6$salt$abcdefghijklmnopqrstuv' | chpasswd -e
@@ -96,6 +96,16 @@ cat >/var/www/example/.htaccess <<'HT'
 </Files>
 HT
 echo geheim >/var/www/example/secret.txt
+# Alter Code: mysql_*-Funktionen, Endung .php3 und eine liegengebliebene Kopie
+cat >/var/www/example/legacy.php3 <<'PHP'
+<?php
+$l = mysql_connect('localhost', 'shopuser', 'geheim1');
+mysql_select_db('shop', $l);
+echo 'legacy=', mysql_num_rows(mysql_query('SELECT * FROM kunden'));
+PHP
+cp /var/www/example/legacy.php3 /var/www/example/legacy.php3_notUsed
+# Zweites Webverzeichnis ohne .htaccess und ohne mysql_* (Suchen ohne Treffer)
+mkdir -p /srv/leer && echo '<?php echo 1;' >/srv/leer/index.php
 chown -R webdev:webteam /var/www/example
 cat >/etc/httpd/conf.d/example.conf <<'CONF'
 <VirtualHost *:80>
@@ -108,6 +118,17 @@ cat >/etc/httpd/conf.d/example.conf <<'CONF'
 </VirtualHost>
 CONF
 echo '*/5 * * * * php /var/www/example/index.php >/dev/null' >/var/spool/cron/webdev
+cat >/etc/httpd/conf.d/second.conf <<'CONF'
+<VirtualHost *:80>
+    ServerName second.test
+    DocumentRoot /var/www/html
+</VirtualHost>
+CONF
+# Zertifikate per acme.sh (Attrappe) wie auf echten Servern
+mkdir -p /root/.acme.sh/example.test
+printf '#!/bin/sh\necho "Main_Domain  example.test"\n' >/root/.acme.sh/acme.sh && chmod +x /root/.acme.sh/acme.sh
+echo "Le_ReloadCmd='service httpd force-reload'" >/root/.acme.sh/example.test/example.test.conf
+echo '44 0 * * * "/root/.acme.sh"/acme.sh --cron --home "/root/.acme.sh" > /dev/null' >/var/spool/cron/root
 mkdir -p /run/php-fpm && php-fpm -D && httpd -k start
 mysql -uroot -p'srcR00t!' 2>/dev/null <<'SQL'
 CREATE DATABASE shop;
@@ -134,7 +155,8 @@ SRC_DB_PASS='srcR00t!'
 DB_USER_EXCLUDE="root mysql.sys mysql.session mysql.infoschema"
 TARGET_DB_ENGINE="mysql84"
 TARGET_PHP_VERSION="8.0"
-CERTBOT_SETUP="no"
+CERTBOT_SETUP="yes"
+WEB_PATHS="/var/www /srv/leer"
 PHP_LINT="yes"
 CONF
 EOF
@@ -146,8 +168,9 @@ docker exec "$TGT" /opt/migration/migrate.sh -y inventory users files database c
 echo "== Prüfungen"
 fail=0
 t() { if docker exec "$TGT" bash -c "$2" >/dev/null 2>&1; then echo "  ok   $1"; else echo "  FEHLER $1"; fail=1; fi; }
-t "Benutzer webdev mit UID 501"            'id -u webdev | grep -qx 501'
-t "Gruppe webteam (GID 510) mit Mitgliedern" 'getent group webteam | grep -q "^webteam:x:510:.*webdev"'
+t "Benutzer webdev mit UID 1501"           'id -u webdev | grep -qx 1501'
+t "Gruppe webteam (GID 1510) mit Mitgliedern" 'getent group webteam | grep -q "^webteam:x:1510:.*webdev"'
+t "Systembenutzer (UID < UID_MIN) nicht übernommen" '! grep -q "useradd.* nginx$\|useradd.* mysql$" /var/log/server-migration/*.log'
 t "ec2-user nicht neu angelegt"             '! id ec2-user'
 t "Passwort-Hash übernommen"                'grep -qF "webdev:\$6\$salt\$abc" /etc/shadow'
 t "Home-Verzeichnis kopiert"                'grep -q "nur auf der Quelle" /home/webdev/notiz.txt'
@@ -159,10 +182,19 @@ t "Crontab übernommen"                      'grep -q index.php /var/spool/cron/
 t "Datenbank übertragen"                    'mysql -N -e "SELECT COUNT(*) FROM shop.kunden" | grep -qx 3'
 t "MySQL-Benutzer mit altem Passwort"       'mysql -ushopuser -pgeheim1 -N -e "SELECT 1" shop'
 t "Website liefert Daten aus der DB"        'curl -s -H "Host: example.test" http://127.0.0.1/ | grep -q "kunden=3 upload=48M"'
+t ".php3 mit mysql_* läuft unter PHP 8"     'curl -s -H "Host: example.test" http://127.0.0.1/legacy.php3 | grep -qx "legacy=3"'
+t "Restdatei .php3_notUsed gesperrt"        '[ "$(curl -s -o /dev/null -w %{http_code} -H "Host: example.test" http://127.0.0.1/legacy.php3_notUsed)" = 403 ]'
 t "secret.txt gesperrt"                     '[ "$(curl -s -o /dev/null -w %{http_code} -H "Host: example.test" http://127.0.0.1/secret.txt)" = 403 ]'
 t ".user.ini gesperrt"                      '[ "$(curl -s -o /dev/null -w %{http_code} -H "Host: example.test" http://127.0.0.1/.user.ini)" = 403 ]'
 t "Bericht erstellt"                        'grep -q "## Ergebnis" /var/lib/server-migration/report.md'
+t "HTTP-Prüfung für alle Websites"          'grep -q "second.test" /var/lib/server-migration/report.md && grep -q "example.test" /var/lib/server-migration/report.md'
+t "acme.sh übernommen"                      '[ -x /root/.acme.sh/acme.sh ] && grep -q acme.sh /var/spool/cron/root'
+t "acme.sh-Reload-Befehl umgestellt"        'grep -qx "Le_ReloadCmd=.systemctl reload httpd." /root/.acme.sh/example.test/example.test.conf'
+t "kein certbot neben acme.sh"              '[ ! -e /etc/cron.d/certbot-renew ]'
+t "keine Abbrüche im Log"                   '! grep -h "Abbruch in Zeile" /var/log/server-migration/*.log'
 t "Zweiter Lauf (idempotent)"               '/opt/migration/migrate.sh -y files database configure'
+t "mysql_* auch nach zweitem Lauf aktiv"    'curl -s -H "Host: example.test" http://127.0.0.1/legacy.php3 | grep -qx "legacy=3"'
+t "keine auto_prepend-Kollision"            '! grep -q "^auto_prepend_file" /etc/php.d/99-migrated.ini'
 docker exec "$TGT" sed -n '/## Ergebnis/,/## Warnungen/p' /var/lib/server-migration/report.md
 [[ $fail == 0 ]] && echo "== E2E OK"
 exit $fail

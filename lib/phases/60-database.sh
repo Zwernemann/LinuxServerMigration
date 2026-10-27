@@ -18,7 +18,7 @@ phase_database() {
     mapfile -t dbs < <(db_list)
 
     step "Export auf der Quelle"
-    src_run DUMP_MODE=accounts "DB_USER_EXCLUDE=$DB_USER_EXCLUDE" "${sv[@]}" -- "$TOOL_DIR/remote/dump.sh" \
+    src_run DUMP_MODE=accounts "DB_USER_EXCLUDE=$DB_USER_EXCLUDE" "TARGET_DB_ENGINE=$TARGET_DB_ENGINE" "${sv[@]}" -- "$TOOL_DIR/remote/dump.sh" \
         >"$dir/accounts.sql" || die "Export der MySQL-Benutzer fehlgeschlagen."
     awk -v u="$dir/users.sql" -v g="$dir/grants.sql" '/^-- @@GRANTS@@/ {gr=1} {print > (gr ? g : u)}' "$dir/accounts.sql"
     { grep '^-- WARN' "$dir/accounts.sql" || true; } | sed 's/^-- WARN: //' | while IFS= read -r n; do warn "MySQL-Benutzer: $n"; done

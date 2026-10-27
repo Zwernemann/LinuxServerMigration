@@ -35,8 +35,8 @@ phase_cutover() {
   ---------------------------------
   1. Apache und cron auf der Quelle werden gestoppt (CUTOVER_STOP_SOURCE=$CUTOVER_STOP_SOURCE)
   2. Dateien und Datenbanken werden ein letztes Mal synchronisiert
-  3. Das Ziel wird geprüft
-  4. Elastic IP wird umgehängt (${ELASTIC_IP_ALLOCATION_ID:-nicht konfiguriert})
+  3. cron startet auf dem neuen Server, das Ziel wird geprüft
+  4. Elastic IP wird umgehängt (${ELASTIC_IP_ALLOCATION_ID:-nicht konfiguriert – danach SOFORT von Hand umhängen})
 
   Die Website ist während dieser Zeit nicht erreichbar.
   Die Quelle wird NICHT gelöscht – Rückweg: ./migrate.sh rollback
@@ -46,12 +46,15 @@ EOF
 
     if is_yes "$CUTOVER_STOP_SOURCE"; then
         step "Quelle stoppen"
-        src_ssh 'sudo -n service httpd stop; sudo -n service crond stop' || warn "Dienste auf der Quelle ließen sich nicht stoppen"
+        src_ssh 'if command -v systemctl >/dev/null && [ -d /run/systemd/system ]; then sudo -n systemctl stop httpd crond; else sudo -n service httpd stop; sudo -n service crond stop; fi' ||
+            warn "Dienste auf der Quelle ließen sich nicht stoppen"
     fi
 
     CURRENT_PHASE=files phase_files
     CURRENT_PHASE=database phase_database
     run systemctl restart php-fpm httpd
+    touch "$WORK_DIR/cutover.done"
+    cron_service
     CURRENT_PHASE=verify phase_verify
 
     if [[ -n "$ELASTIC_IP_ALLOCATION_ID" ]]; then
@@ -76,7 +79,11 @@ EOF
 
 phase_rollback() {
     confirm "Quelle wieder in Betrieb nehmen (Apache/cron starten, Elastic IP zurück)?" || die "Abgebrochen."
-    src_ssh 'sudo -n service crond start; sudo -n service httpd start' || die "Dienste auf der Quelle ließen sich nicht starten."
+    # Auf dem neuen Server cron wieder anhalten, damit Jobs nicht doppelt laufen
+    rm -f "$WORK_DIR/cutover.done"
+    cron_service
+    src_ssh 'if command -v systemctl >/dev/null && [ -d /run/systemd/system ]; then sudo -n systemctl start crond httpd; else sudo -n service crond start; sudo -n service httpd start; fi' ||
+        die "Dienste auf der Quelle ließen sich nicht starten."
     if [[ -n "$ELASTIC_IP_ALLOCATION_ID" ]]; then
         [[ -n "$SRC_INSTANCE_ID" ]] || die "SRC_INSTANCE_ID ist nicht gesetzt – Elastic IP bitte manuell zurückhängen."
         move_eip "$SRC_INSTANCE_ID"

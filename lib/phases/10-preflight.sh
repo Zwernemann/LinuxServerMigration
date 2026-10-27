@@ -21,7 +21,7 @@ phase_preflight() {
 
     log "Teste SSH-Verbindung zu $SRC ..."
     src_ssh true ||
-        die "SSH zu $SRC fehlgeschlagen. Security Group (Port $SRC_SSH_PORT vom neuen Server erlaubt?), Benutzer und Schlüssel prüfen."
+        die "SSH zu $SRC fehlgeschlagen. Läuft SSH auf der Quelle auf Port $SRC_SSH_PORT (sonst SRC_SSH_PORT in migration.conf setzen)? Erlaubt die Security Group diesen Port vom neuen Server? Benutzer und Schlüssel prüfen."
     src_ssh 'sudo -n true' 2>/dev/null ||
         die "Auf der Quelle ist 'sudo' ohne Passwort/TTY nicht möglich. Auf der Quelle ausführen:
     echo 'Defaults:$SRC_SSH_USER !requiretty' | sudo tee /etc/sudoers.d/99-migration
@@ -32,9 +32,9 @@ phase_preflight() {
     log "Quelle: $rel"
     [[ "$rel" == *"Amazon Linux"* ]] || warn "Quelle meldet sich nicht als Amazon Linux: '$rel'"
 
-    if ! src_ssh 'command -v rsync >/dev/null'; then
-        log "Installiere rsync auf der Quelle ..."
-        src_ssh 'sudo -n yum -y -q install rsync' || die "rsync konnte auf der Quelle nicht installiert werden."
+    if ! src_ssh 'command -v rsync >/dev/null && command -v tar >/dev/null && command -v gzip >/dev/null'; then
+        log "Installiere rsync/tar/gzip auf der Quelle ..."
+        src_ssh 'sudo -n yum -y -q install rsync tar gzip' || die "rsync/tar/gzip konnten auf der Quelle nicht installiert werden."
     fi
 
     if is_yes "$MIGRATE_DATABASE"; then

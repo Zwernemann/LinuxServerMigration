@@ -13,7 +13,7 @@ web_paths() {
             [[ "${k,,}" == documentroot && -n "$p" ]] && all+=("${p%/}")
         done <"$(inv_file httpd-paths.tsv)"
     fi
-    mapfile -t all < <(printf '%s\n' "${all[@]}" | sed 's:/*$::' | grep -v '^$' | sort -u)
+    mapfile -t all < <(printf '%s\n' "${all[@]}" | sed 's:/*$::' | { grep -v '^$' || true; } | sort -u)
     for p in "${all[@]}"; do
         skip=0
         for q in "${all[@]}"; do
@@ -42,7 +42,7 @@ phase_files() {
     local paths=()
     mapfile -t paths < <(web_paths)
     for p in "${paths[@]}"; do
-        if ! src_ssh "test -d '$p'"; then warn "Pfad $p existiert auf der Quelle nicht – übersprungen"; continue; fi
+        if ! src_ssh "sudo -n test -d '$p'"; then warn "Pfad $p existiert auf der Quelle nicht – übersprungen"; continue; fi
         log "Synchronisiere $p ..."
         mkdir -p "$p"
         sync_dir "${wopts[@]}" "${excl[@]}" "$SRC:$p/" "$p/"
@@ -64,10 +64,10 @@ phase_files() {
             src_rsync -L "$SRC:$f" "$f" 2>/dev/null || warn "Zertifikatsdatei $f konnte nicht kopiert werden"
         done <"$(inv_file httpd-paths.tsv)"
     fi
-    existing=$(src_ssh "for p in /etc/letsencrypt $EXTRA_PATHS; do [ -e \"\$p\" ] && echo \"\$p\"; done" || true)
+    existing=$(src_ssh "sudo -n sh -c 'for p in /etc/letsencrypt /root/.acme.sh $EXTRA_PATHS; do [ -e \"\$p\" ] && echo \"\$p\"; done'" || true)
     for p in $existing; do
         log "Kopiere $p ..."
-        if src_ssh "test -d '$p'"; then
+        if src_ssh "sudo -n test -d '$p'"; then
             mkdir -p "$p"
             src_rsync "${excl[@]}" "$SRC:$p/" "$p/"
         else
@@ -78,6 +78,7 @@ phase_files() {
 
     step "Anpassungen im Webverzeichnis"
     webroot_adjust
+    acmesh_adjust
     php_compat_scan
 }
 
@@ -97,6 +98,30 @@ sync_dir() {
     rm -f "$out"
 }
 
+# acme.sh: Reload-Befehle mit "service"/Init-Skripten gibt es auf AL2023 nicht
+# mehr – auf systemctl umstellen. Läuft nach jedem Sync, weil rsync die
+# Einstellungen der Quelle zurückkopiert.
+acmesh_adjust() {
+    local f cmd new
+    for f in /root/.acme.sh/*/*.conf; do
+        [[ -f "$f" ]] || continue
+        cmd=$(sed -n "s/^Le_ReloadCmd='\(.*\)'$/\1/p" "$f")
+        if [[ "$cmd" == __ACME_BASE64__START_* ]]; then
+            cmd=${cmd#__ACME_BASE64__START_}
+            cmd=$(base64 -d <<<"${cmd%__ACME_BASE64__END_}" 2>/dev/null || true)
+        fi
+        [[ -n "$cmd" ]] || continue
+        new=$(sed -E 's#(/sbin/|/usr/sbin/)?service[[:space:]]+httpd[[:space:]]+(restart|reload|force-reload|graceful)#systemctl reload httpd#g;
+                      s#/etc/init\.d/httpd[[:space:]]+(restart|reload|force-reload|graceful)#systemctl reload httpd#g' <<<"$cmd")
+        if [[ "$new" != "$cmd" ]]; then
+            sed -i "s|^Le_ReloadCmd=.*|Le_ReloadCmd='$new'|" "$f"
+            log "acme.sh ($(basename "$(dirname "$f")")): Reload-Befehl '$cmd' -> '$new'"
+        elif [[ "$cmd" == *service* || "$cmd" == */etc/init.d/* ]]; then
+            warn "acme.sh ($(basename "$(dirname "$f")")): Reload-Befehl '$cmd' bitte auf systemctl umstellen"
+        fi
+    done
+}
+
 # .htaccess an PHP-FPM und Apache 2.4 anpassen. Muss nach jedem Sync laufen,
 # weil rsync die Originale der Quelle zurückkopiert.
 webroot_adjust() {
@@ -108,13 +133,13 @@ webroot_adjust() {
             while IFS= read -r -d '' f; do
                 "$TOOL_DIR/tools/php-to-userini.sh" htaccess "$f" 2>>"$WORK_DIR/htaccess.log" || true
             done < <(find "$p" -name .htaccess -type f -print0 2>/dev/null |
-                xargs -0 -r grep -lZiE '^[[:space:]]*php_(admin_)?(value|flag)[[:space:]]' 2>/dev/null)
+                xargs -0 -r grep -lZiE '^[[:space:]]*php_(admin_)?(value|flag)[[:space:]]' 2>/dev/null || true)
         fi
         if is_yes "$APACHE_CONVERT_ACCESS"; then
             while IFS= read -r -d '' f; do
                 "$TOOL_DIR/tools/apache24-convert.sh" -i "$f" 2>>"$WORK_DIR/htaccess.log" || true
             done < <(find "$p" -name .htaccess -type f -print0 2>/dev/null |
-                xargs -0 -r grep -lZiE '^[[:space:]]*(order|allow[[:space:]]+from|deny[[:space:]]+from)[[:space:]]' 2>/dev/null)
+                xargs -0 -r grep -lZiE '^[[:space:]]*(order|allow[[:space:]]+from|deny[[:space:]]+from)[[:space:]]' 2>/dev/null || true)
         fi
     done
     if [[ -s "$WORK_DIR/htaccess.log" ]]; then

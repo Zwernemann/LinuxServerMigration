@@ -1,4 +1,4 @@
-# Schritt-für-Schritt-Anleitung: Umzug von Amazon Linux 2018 auf 2023
+# Schritt-für-Schritt-Anleitung: Umzug von Amazon Linux 2018 / Amazon Linux 2 auf 2023
 
 Diese Anleitung setzt **keine Linux-Profikenntnisse** voraus. Alles, was du
 brauchst, ist ein Browser und dein AWS-Login.
@@ -56,6 +56,9 @@ Das Skript zeigt zuerst an, was es vorhat, und fragt nach. Danach:
   ist gleich groß, aus der aktuellen Generation (z.B. `t2.small` → `t3.small`).
 - Der neue Server bekommt eine Rolle für den **Session Manager**. Damit
   meldest du dich später im Browser an, ganz ohne Schlüsseldatei.
+- Über den Session Manager installiert das Skript auf dem neuen Server das
+  Tool nach `/opt/linuxservermigration`, außerdem `tmux`. Die Ausgabe siehst
+  du direkt in der CloudShell.
 - Der alte Server erlaubt SSH-Zugriffe vom neuen Server, aber **nur** von
   diesem.
 - Ist der alte Server noch nicht beim Session Manager angemeldet, fragt das
@@ -212,6 +215,39 @@ Das startet den alten Server wieder und hängt die Elastic IP zurück.
 
 ---
 
+## Problem: `tmux` oder `/opt/linuxservermigration` fehlt
+
+Dann ist die Einrichtung des neuen Servers nicht vollständig durchgelaufen.
+Zwei Wege, es nachzuholen:
+
+**a) In der CloudShell** das Skript einfach noch einmal ausführen. Es erkennt
+den vorhandenen neuen Server und holt die Einrichtung nach:
+
+```bash
+cd LinuxServerMigration && git pull
+bash aws/provision-target.sh --old-instance i-0abc123def4567890
+```
+
+Hast du den neuen Server selbst angelegt, gib ihn zusätzlich mit
+`--new-instance i-…` an.
+
+**b) Direkt auf dem neuen Server** (private IP des alten Servers einsetzen):
+
+```bash
+sudo -i
+dnf -y install git
+git clone https://github.com/Zwernemann/LinuxServerMigration.git /opt/linuxservermigration
+/opt/linuxservermigration/aws/setup-target.sh --src-host 172.30.0.12
+```
+
+Am Ende wird der Befehl `echo 'ssh-ed25519 …' >> ~/.ssh/authorized_keys`
+angezeigt. Ihn einmal auf dem **alten** Server ausführen (siehe nächster
+Abschnitt).
+
+Schlägt schon `dnf install` fehl, hat der neue Server keinen Internetzugang.
+Dann in der EC2-Konsole prüfen, ob er eine öffentliche IP hat bzw. ob sein
+Subnetz über ein Internet- oder NAT-Gateway verfügt.
+
 ## Zugang zum alten Server
 
 Normalerweise musst du dich **gar nicht** selbst am alten Server anmelden;
@@ -233,6 +269,11 @@ in der EC2-Konsole beim alten Server unter *Schlüsselpaarname*.
 - Oder in der **CloudShell**: über *Aktionen* → *Datei hochladen* die
   `.pem`-Datei hochladen, dann wie bei Mac/Linux.
 
+**SSH läuft nicht auf Port 22?** Viele Server verwenden einen anderen Port,
+z.B. `ssh -p 22978 …`. Dann in `/opt/linuxservermigration/migration.conf`
+`SRC_SSH_PORT="22978"` eintragen und `provision-target.sh` mit
+`--src-ssh-port 22978` aufrufen.
+
 Kommt keine Verbindung zustande, erlaubt die Security Group des alten Servers
 wahrscheinlich kein SSH von deiner IP. Dann in der EC2-Konsole unter
 *Security Groups* eine Regel *SSH, Quelle: Meine IP* hinzufügen.
@@ -247,8 +288,9 @@ Automatisierung *AWSSupport-ResetAccess* (Systems Manager → Automatisierung).
 Sie setzt einen neuen Schlüssel, **stoppt dafür aber den Server kurz**.
 Alternativ hilft der AWS-Support.
 
-> EC2 Instance Connect funktioniert beim alten Amazon Linux 2018 nicht; erst
-> ab Amazon Linux 2.
+> **Amazon Linux 2:** Hier gibt es zusätzlich *EC2 Instance Connect*
+> (EC2-Konsole → *Verbinden* → *EC2 Instance Connect*), ganz ohne
+> Schlüsseldatei. Beim alten Amazon Linux 2018 funktioniert das nicht.
 
 ---
 
@@ -293,6 +335,28 @@ Die Version zeigt `mysql --version`.)
 `MIGRATE_DATABASE="no"` setzen. Die Anwendung greift weiter auf RDS zu.
 
 ---
+
+## Checkliste aus der Praxis
+
+Diese Punkte haben sich bei echten Umzügen als wichtig erwiesen:
+
+- [ ] **SSH-Port:** Läuft SSH auf dem alten Server nicht auf Port 22? Dann
+      `SRC_SSH_PORT` in `migration.conf` setzen. Auf dem neuen Server den
+      gewünschten Port in `/etc/ssh/sshd_config.d/10-port.conf` eintragen.
+- [ ] **MySQL-Benutzer:** Der Benutzer der Anwendung reicht oft
+      (`SRC_DB_USER`/`SRC_DB_PASS`), wenn er Rechte auf alle Datenbanken hat.
+- [ ] **Alter PHP-Code** (`mysql_*`, `.php3`) läuft über die
+      Kompatibilitätsschicht. Prüfen: `php -i | grep auto_prepend_file`.
+- [ ] **Restdateien** wie `*.php_alt` oder `*.php3_notUsed` sind auf dem
+      alten Server oft öffentlich lesbar. Aus dem Webverzeichnis verschieben.
+- [ ] **cron** läuft auf dem neuen Server erst nach dem Cutover. So gibt es
+      keine doppelten Erinnerungsmails.
+- [ ] **Mailversand testen**, bevor umgeschaltet wird. Amazon sperrt Port 25
+      bei neuen Servern oft.
+- [ ] **Zertifikate:** Das Tool erkennt acme.sh oder certbot. Nach dem
+      Umhängen der Elastic IP eine Erneuerung testen.
+- [ ] **Elastic IP** behalten. Dann bleiben IP, Reverse-DNS und SPF gleich,
+      und Mails kommen weiter an.
 
 ## Häufige Fragen
 

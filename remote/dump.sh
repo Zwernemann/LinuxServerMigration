@@ -10,10 +10,16 @@ case "${DUMP_MODE:-}" in
 # ---------------------------------------------------------------------------
 db)
     rlog "Exportiere Datenbank ${DUMP_DB} ..."
+    extra=()
+    # MySQL 5.6+ mit GTIDs: ohne diese Option scheitert ein zweiter Import
+    # (Cutover) an "GTID_PURGED can only be set when GTID_EXECUTED is empty"
+    if "$(mysqldump_bin)" --help 2>/dev/null | grep -q -- '--set-gtid-purged'; then
+        extra+=(--set-gtid-purged=OFF)
+    fi
     "$(mysqldump_bin)" --defaults-extra-file="$MY_CNF" \
         --single-transaction --quick --routines --triggers --events \
         --hex-blob --add-drop-database --default-character-set=utf8mb4 \
-        --max-allowed-packet=1G --databases "$DUMP_DB" </dev/null | gzip -c >&3
+        --max-allowed-packet=1G ${extra[@]+"${extra[@]}"} --databases "$DUMP_DB" </dev/null | gzip -c >&3
     ;;
 # ---------------------------------------------------------------------------
 accounts)
@@ -38,6 +44,14 @@ accounts)
     # Präfixe "h:"/"p:", weil read leere Felder zwischen Tabs zusammenfasst
     users=$(q "SELECT User, Host, CONCAT('h:', COALESCE($pw, '')), CONCAT('p:', $plugin)
                  FROM mysql.user WHERE User NOT IN ($excl)")
+    # MySQL -> MySQL 8.4: Konten 1:1 per SHOW CREATE USER übernehmen, auch mit
+    # caching_sha2_password (Standard ab MySQL 8.0). Der Hash ist binär und
+    # wird deshalb hexadezimal ausgegeben (MySQL >= 8.0.17).
+    scu=0
+    case "$(q 'SELECT VERSION()')" in
+    *MariaDB* | 5.5.* | 5.6.*) ;;
+    *) [ "${TARGET_DB_ENGINE:-}" = mysql84 ] && scu=1 ;;
+    esac
     {
         echo "-- @@USERS@@"
         printf '%s\n' "$users" | while IFS=$'\t' read -r user host hash plug; do
@@ -45,6 +59,26 @@ accounts)
             acct="$(sqlq "$user")@$(sqlq "$host")"
             hash=${hash#h:}
             plug=${plug#p:}
+            if [ $scu = 1 ]; then
+                case "$plug" in
+                mysql_native_password | caching_sha2_password | sha256_password | '') ;;
+                *)
+                    echo "-- WARN: $acct verwendet Plugin '$plug' – übersprungen"
+                    continue
+                    ;;
+                esac
+                cu=$(q "SET SESSION print_identified_with_as_hex = ON; SHOW CREATE USER $acct" 2>/dev/null)
+                if [ -z "$cu" ] && [ "$plug" != caching_sha2_password ] && [ "$plug" != sha256_password ]; then
+                    cu=$(q "SHOW CREATE USER $acct" 2>/dev/null)
+                fi
+                if [ -n "$cu" ]; then
+                    [ -n "$hash" ] || echo "-- WARN: $acct hat KEIN Passwort"
+                    echo "DROP USER IF EXISTS $acct;"
+                    echo "$cu;"
+                    continue
+                fi
+                echo "-- WARN: $acct konnte nicht 1:1 exportiert werden (MySQL < 8.0.17?) – Passwort auf dem Ziel neu setzen"
+            fi
             case "$plug" in
             '' | mysql_native_password) ;;
             *)

@@ -8,15 +8,16 @@ phase_configure() {
     require_inventory
     mkdir -p "$WORK_DIR/gen"
     configure_php
+    configure_mysql_shim
     configure_apache
     is_yes "$MIGRATE_CRON" && configure_cron
     configure_logrotate
-    is_yes "$CERTBOT_SETUP" && [[ -d /etc/letsencrypt/renewal ]] && configure_certbot
+    configure_acme
 
     step "Dienste neu starten"
     run systemctl restart php-fpm
     run systemctl restart httpd
-    run systemctl restart crond
+    cron_service
 }
 
 # ---------------------------------------------------------------------------
@@ -26,11 +27,20 @@ configure_php() {
     src_tsv=$(inv_file php-ini.tsv)
     tgt_tsv="$WORK_DIR/gen/php-ini-target.tsv"
     gen="$WORK_DIR/gen/99-migrated.ini"
-    PHP_INI_KEYS=$PHP_INI_KEYS php -r '
+    # Standardwerte des Ziels OHNE die vom Tool selbst geschriebenen ini-Dateien
+    # (sonst hält ein zweiter Lauf die eigenen Einstellungen für Unterschiede)
+    local scandir
+    scandir=$(mktemp -d)
+    for f in /etc/php.d/*.ini; do
+        case "$(basename "$f")" in 95-mysql-compat.ini | 99-migrated.ini | 90-migrated-*) continue ;; esac
+        ln -s "$f" "$scandir/"
+    done
+    PHP_INI_SCAN_DIR=$scandir PHP_INI_KEYS=$PHP_INI_KEYS php -r '
         foreach (preg_split("/\s+/", getenv("PHP_INI_KEYS"), -1, PREG_SPLIT_NO_EMPTY) as $k) {
             $v = ini_get($k);
             if ($v !== false) { echo $k, "\t", $v, "\n"; }
         }' >"$tgt_tsv"
+    rm -rf "${scandir:?}"
     tz=$(inv_get SRC_TIMEZONE)
     {
         echo "; Automatisch erzeugt durch LinuxServerMigration"
@@ -120,7 +130,9 @@ configure_apache() {
         done < <(awk 'tolower($1) ~ /^include(optional)?$/ {gsub(/"/, "", $2); print $2}' "$(snap /etc/httpd/conf/httpd.conf)")
     fi
 
-    # 5) Listen-Ports, Schutz der .user.ini
+    # 5) Listen-Ports, Schutz der .user.ini, alte PHP-Endungen, Backup-Dateien
+    local legacy
+    legacy=$(legacy_php_extensions)
     {
         echo "# Automatisch erzeugt durch LinuxServerMigration"
         cat "$gen"/*.listen 2>/dev/null | sort -u
@@ -129,7 +141,23 @@ configure_apache() {
         echo '<Files ".user.ini">'
         echo '    Require all denied'
         echo '</Files>'
+        if [[ -n "$legacy" ]]; then
+            echo
+            echo "# Alte PHP-Endungen der Quelle ebenfalls über PHP-FPM ausführen"
+            echo "<FilesMatch \"\\.(${legacy// /|})\$\">"
+            echo "    SetHandler \"proxy:$(fpm_listen)|fcgi://localhost\""
+            echo '</FilesMatch>'
+        fi
+        if is_yes "$DENY_BACKUP_FILES"; then
+            echo
+            echo "# Backup-/Restdateien (z.B. x.php.bak, x.php3_notUsed, *.inc, *.sql) nicht als Text ausliefern"
+            echo "<FilesMatch \"$BACKUP_FILES_RE\">"
+            echo '    Require all denied'
+            echo '</FilesMatch>'
+        fi
     } >"$gen/migrated-00-listen.conf"
+    [[ -z "$legacy" ]] || fpm_allow_extensions "$legacy"
+    is_yes "$DENY_BACKUP_FILES" && report_backup_files
     generated=(migrated-00-listen.conf "${generated[@]}")
 
     # Hinweise der Konvertierung
@@ -166,7 +194,7 @@ configure_apache() {
         local m missing=()
         while read -r m; do
             case "$m" in
-            php5_module | php7_module | php_module | authz_default_module | authn_alias_module | \
+            mpm_*_module | php5_module | php7_module | php_module | authz_default_module | authn_alias_module | \
                 disk_cache_module | mem_cache_module | ident_module | version_module | \
                 authn_default_module | cern_meta_module | asis_module | dumpio_module | \
                 substitute_module | suexec_module | cgi_module | cgid_module | usertrack_module) continue ;;
@@ -182,6 +210,85 @@ configure_apache() {
     fi
     grep -i 'warn' "$gen/configtest.out" | while IFS= read -r n; do warn "Apache: $n"; done || true
     log "Apache-Konfigurationstest OK."
+}
+
+# Dateinamen, die gesperrt werden: PHP-Endung + Anhang (x.php.bak,
+# x.php3_notUsed, x.php~) sowie *.inc, *.bak, *.old, *.orig, *.swp, *.sql
+BACKUP_FILES_RE='(\.(php[0-9]?|phtml)[^0-9A-Za-z/][^/]*|\.(inc|bak|old|orig|swp|sql))$'
+
+# Welche alten PHP-Endungen kommen in den Webverzeichnissen vor?
+legacy_php_extensions() {
+    case "${PHP_LEGACY_EXTENSIONS,,}" in no | false | 0) return 0 ;; esac
+    local ext found=()
+    for ext in php3 php4 php5 phtml; do
+        if [[ "${PHP_LEGACY_EXTENSIONS,,}" == yes ]] ||
+            web_paths | tr '\n' '\0' | xargs -0 -r -I{} find {} -type f -name "*.$ext" -print -quit 2>/dev/null | grep -q .; then
+            found+=("$ext")
+        fi
+    done
+    echo "${found[*]}"
+}
+
+# Socket/Adresse des PHP-FPM-Pools www für SetHandler
+fpm_listen() {
+    local l
+    l=$(awk -F= '/^[[:space:]]*listen[[:space:]]*=/ {gsub(/[[:space:]]/, "", $2); print $2; exit}' /etc/php-fpm.d/www.conf 2>/dev/null)
+    l=${l:-/run/php-fpm/www.sock}
+    if [[ "$l" == /* ]]; then echo "unix:$l"; else echo "fcgi://$l"; fi
+}
+
+# PHP-FPM führt aus Sicherheitsgründen nur .php aus – alte Endungen erlauben
+fpm_allow_extensions() {
+    local conf=/etc/php-fpm.d/www.conf exts=".php .phar" e
+    for e in $1; do exts="$exts .$e"; done
+    [[ -f "$conf" ]] || return 0
+    if grep -q '^security.limit_extensions' "$conf"; then
+        sed -i "s/^security.limit_extensions.*/security.limit_extensions = $exts/" "$conf"
+    else
+        printf '\n; LinuxServerMigration: alte PHP-Endungen der Quelle\nsecurity.limit_extensions = %s\n' "$exts" >>"$conf"
+    fi
+    log "PHP-FPM führt jetzt aus: $exts"
+}
+
+report_backup_files() {
+    local p f n=0
+    while IFS= read -r p; do
+        [[ -d "$p" ]] || continue
+        while IFS= read -r f; do
+            n=$((n + 1))
+            [[ $n -le 20 ]] && log "Gesperrt für Webzugriff: $f"
+        done < <(find "$p" -type f 2>/dev/null | grep -E "/[^/]*$BACKUP_FILES_RE" || true)
+    done < <(web_paths)
+    [[ $n -eq 0 ]] || warn "$n Backup-/Restdateien im Webverzeichnis werden nicht mehr ausgeliefert (auf dem alten Server waren sie ggf. lesbar) – am besten löschen."
+}
+
+# ---------------------------------------------------------------------------
+# mysql_*-Kompatibilitätsschicht für alten Code
+configure_mysql_shim() {
+    local mode=${PHP_MYSQL_SHIM,,} dest=/usr/share/php/linuxservermigration/mysql-compat.php
+    local ini=/etc/php.d/95-mysql-compat.ini tmp n=0 p
+    case "$mode" in no | false | 0) return 0 ;; esac
+    if [[ "$mode" == auto ]]; then
+        while IFS= read -r p; do
+            [[ -d "$p" ]] || continue
+            n=$((n + $({ grep -rlE --include='*.php*' --include='*.phtml' --include='*.inc' \
+                '\bmysql_[a-z_]+[[:space:]]*\(' "$p" 2>/dev/null || true; } | wc -l)))
+        done < <(web_paths)
+        [[ $n -gt 0 ]] || return 0
+    fi
+    step "mysql_*-Kompatibilität"
+    install -D -m 0644 "$TOOL_DIR/tools/mysql-compat.php" "$dest"
+    tmp=$(mktemp)
+    {
+        echo "; LinuxServerMigration: mysql_*-Funktionen (in PHP 7 entfernt) über mysqli nachbilden"
+        echo "auto_prepend_file = $dest"
+    } >"$tmp"
+    install_generated "$tmp" "$ini"
+    rm -f "$tmp"
+    if grep -qs '^auto_prepend_file' /etc/php.d/99-migrated.ini; then
+        warn "auto_prepend_file ist auch in /etc/php.d/99-migrated.ini gesetzt und überschreibt die mysql_*-Kompatibilität – bitte zusammenführen"
+    fi
+    warn "Code verwendet mysql_* ($n Dateien) – Kompatibilitätsschicht aktiv ($dest). Langfristig auf mysqli/PDO umstellen."
 }
 
 # ---------------------------------------------------------------------------
@@ -226,6 +333,34 @@ configure_logrotate() {
 }
 
 # ---------------------------------------------------------------------------
+# Zertifikatserneuerung: so wie auf der Quelle (acme.sh oder certbot)
+configure_acme() {
+    local crons acmesh=0 certbot=0
+    crons=$(cat "$(snap /var/spool/cron)"/* "$(snap /etc/cron.d)"/* 2>/dev/null | grep -v '^[[:space:]]*#' || true)
+    grep -q 'acme\.sh' <<<"$crons" && acmesh=1
+    grep -q 'certbot\|letsencrypt-auto' <<<"$crons" && certbot=1
+    if [[ $acmesh == 1 ]]; then
+        configure_acmesh
+    fi
+    if is_yes "$CERTBOT_SETUP" && [[ -d /etc/letsencrypt/renewal ]] && { [[ $certbot == 1 ]] || [[ $acmesh == 0 ]]; }; then
+        configure_certbot
+    elif [[ $acmesh == 1 && -d /etc/letsencrypt/renewal ]]; then
+        log "Zertifikate werden mit acme.sh erneuert – certbot wird nicht eingerichtet."
+    fi
+}
+
+configure_acmesh() {
+    step "acme.sh"
+    local home=/root/.acme.sh
+    if [[ ! -x "$home/acme.sh" ]]; then
+        warn "acme.sh wird auf der Quelle per Cron verwendet, aber $home fehlt auf dem Ziel – Phase 'files' ausführen"
+        return 0
+    fi
+    pkg_install socat openssl 2>/dev/null || true  # curl: curl-minimal ist vorhanden
+    "$home/acme.sh" --list --home "$home" 2>&1 | sed 's/^/    /' | tee -a "$LOG_FILE" >&2 || true
+    acmesh_adjust
+}
+
 configure_certbot() {
     step "Let's Encrypt / certbot"
     if ! command -v certbot >/dev/null 2>&1; then

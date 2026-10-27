@@ -1,6 +1,6 @@
 # =============================================================================
 #  Konfiguration für LinuxServerMigration
-#  Amazon Linux AMI 2018.03  ──►  Amazon Linux 2023
+#  Amazon Linux AMI 2018.03 / Amazon Linux 2  ──►  Amazon Linux 2023
 #
 #  Kopieren nach  migration.conf  und anpassen:
 #      cp migration.conf.example migration.conf
@@ -8,7 +8,7 @@
 # =============================================================================
 
 # ---------------------------------------------------------------------------
-# Quellserver (alter Amazon Linux 2018.03)
+# Quellserver (alter Amazon Linux 2018.03 oder Amazon Linux 2)
 # ---------------------------------------------------------------------------
 # Am besten die PRIVATE IP verwenden – die Elastic IP wird beim Cutover
 # eventuell auf den neuen Server umgehängt.
@@ -40,10 +40,13 @@ DB_USER_EXCLUDE="root mysql.sys mysql.session mysql.infoschema debian-sys-maint 
 TARGET_PHP_VERSION="8.3"
 
 # Datenbank-Server auf dem Ziel:
-#   mariadb  – MariaDB aus den AL2023-Repos (empfohlen, keine Fremdrepos,
-#              nimmt MySQL-5.x-Dumps und Passwort-Hashes problemlos an)
-#   mysql84  – MySQL Community 8.4 LTS aus dem offiziellen Oracle-Repo
-TARGET_DB_ENGINE="mariadb"
+#   auto     – empfohlen: mysql84, wenn die Quelle MySQL 8.x ist, sonst mariadb
+#   mariadb  – MariaDB aus den AL2023-Repos (keine Fremdrepos; ideal für
+#              MySQL 5.x und MariaDB als Quelle)
+#   mysql84  – MySQL Community 8.4 LTS aus dem offiziellen Oracle-Repo (für
+#              MySQL 8.0 als Quelle: gleiche Kollationen wie utf8mb4_0900_ai_ci,
+#              Benutzer mit caching_sha2_password werden 1:1 übernommen)
+TARGET_DB_ENGINE="auto"
 MYSQL84_REPO_RPM="https://dev.mysql.com/get/mysql84-community-release-el9-1.noarch.rpm"
 
 # root-Passwort der neuen Datenbank.
@@ -84,10 +87,25 @@ PHP_DIRECTIVES_TO_USERINI="yes"
 PHP_INI_KEYS="memory_limit upload_max_filesize post_max_size max_execution_time max_input_time max_input_vars max_file_uploads date.timezone short_open_tag display_errors display_startup_errors error_reporting log_errors html_errors output_buffering default_charset allow_url_fopen allow_url_include file_uploads expose_php disable_functions auto_prepend_file auto_append_file include_path open_basedir default_socket_timeout session.gc_maxlifetime session.cookie_lifetime session.cookie_httponly session.cookie_secure session.use_strict_mode zlib.output_compression mysqli.default_host mysqli.default_user mbstring.language mbstring.internal_encoding"
 # Fehlende PHP-Erweiterungen (redis, apcu, zip, …) per PECL kompilieren
 PECL_AUTO="yes"
+# Alten Code mit mysql_*-Funktionen (in PHP 7 entfernt) unverändert weiter
+# betreiben: Kompatibilitätsschicht per auto_prepend_file laden
+#   auto = nur wenn der Code mysql_* verwendet
+PHP_MYSQL_SHIM="auto"
+# .php3/.php4/.php5/.phtml-Dateien wie .php ausführen (statt sie als Text
+# auszuliefern – inklusive Passwörtern im Quelltext)
+PHP_LEGACY_EXTENSIONS="auto"
+# Backup-/Restdateien wie datei.php.bak, datei.php3_notUsed, *.inc, *.sql
+# für den Webzugriff sperren (würden sonst als Text ausgeliefert)
+DENY_BACKUP_FILES="yes"
 # Alle *.php-Dateien nach der Migration mit "php -l" auf Syntaxfehler prüfen
 PHP_LINT="yes"
 # Let's-Encrypt-Zertifikate übernehmen und certbot einrichten (falls vorhanden)
 CERTBOT_SETUP="yes"
+# Zusätzliche Pakete für den neuen Server (z.B. "mc htop")
+EXTRA_PACKAGES=""
+# Cronjobs auf dem neuen Server erst beim Cutover starten. Sonst laufen sie
+# doppelt (alter + neuer Server), z.B. Erinnerungsmails an Kunden.
+CRON_BEFORE_CUTOVER="no"
 # Mailserver installieren (auto = wenn auf der Quelle sendmail/postfix lief)
 INSTALL_MTA="auto"
 
