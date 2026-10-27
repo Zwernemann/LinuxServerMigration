@@ -40,10 +40,13 @@ DB_USER_EXCLUDE="root mysql.sys mysql.session mysql.infoschema debian-sys-maint 
 TARGET_PHP_VERSION="8.3"
 
 # Datenbank-Server auf dem Ziel:
-#   mariadb  – MariaDB aus den AL2023-Repos (empfohlen, keine Fremdrepos,
-#              nimmt MySQL-5.x-Dumps und Passwort-Hashes problemlos an)
-#   mysql84  – MySQL Community 8.4 LTS aus dem offiziellen Oracle-Repo
-TARGET_DB_ENGINE="mariadb"
+#   auto     – empfohlen: mysql84, wenn die Quelle MySQL 8.x ist, sonst mariadb
+#   mariadb  – MariaDB aus den AL2023-Repos (keine Fremdrepos; ideal für
+#              MySQL 5.x und MariaDB als Quelle)
+#   mysql84  – MySQL Community 8.4 LTS aus dem offiziellen Oracle-Repo (für
+#              MySQL 8.0 als Quelle: gleiche Kollationen wie utf8mb4_0900_ai_ci,
+#              Benutzer mit caching_sha2_password werden 1:1 übernommen)
+TARGET_DB_ENGINE="auto"
 MYSQL84_REPO_RPM="https://dev.mysql.com/get/mysql84-community-release-el9-1.noarch.rpm"
 
 # root-Passwort der neuen Datenbank.

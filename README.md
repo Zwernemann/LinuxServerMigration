@@ -27,10 +27,11 @@ für einen Rückweg unverändert.
 | **Amazon Linux 2** | systemd, MariaDB 5.5/10.x (`amazon-linux-extras`) oder MySQL 5.7/8.0. PHP aus `amazon-linux-extras` oder den Remi-Repos, auch als Software Collection unter `/opt/remi/phpXX`. Systembenutzer (UID < 1000) werden erkannt und nicht übernommen. Der SSM-Agent ist vorinstalliert, deshalb klappt die Einrichtung mit `provision-target.sh` meist vollautomatisch. |
 
 Grenzen:
-- **MySQL-8-Benutzer mit `caching_sha2_password`** (Standard bei MySQL 8.0)
-  lassen sich nicht nach MariaDB übernehmen. Das Tool meldet sie, und ihr
-  Passwort muss auf dem Ziel neu gesetzt werden. Alternativ als Ziel
-  `TARGET_DB_ENGINE="mysql84"` wählen.
+- **MySQL 8.0 als Quelle:** Mit `TARGET_DB_ENGINE="auto"` (Standard) wird
+  automatisch **MySQL 8.4 LTS** installiert und nicht MariaDB. MariaDB kennt
+  MySQL-8-Kollationen wie `utf8mb4_0900_ai_ci` und
+  `caching_sha2_password`-Konten nicht. Nach MySQL 8.4 werden alle Konten
+  1:1 mit ihrem Passwort-Hash übernommen (getestet in `tests/db-mysql8.sh`).
 - **PHP-Version:** AL2023 bietet PHP 8.2, 8.3 und 8.4. PHP 8.2 bekommt nur
   noch bis Ende 2026 Sicherheitsupdates; für neue Umzüge ist **8.3 oder 8.4**
   die bessere Wahl (`TARGET_PHP_VERSION`).

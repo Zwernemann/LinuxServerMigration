@@ -74,6 +74,7 @@ done
 
 [[ $EUID -eq 0 ]] || die "Bitte als root ausführen: sudo $0 ${phases[*]}"
 init_ssh
+resolve_db_engine 2>/dev/null || true
 
 for p in "${expanded[@]}"; do
     declare -F "phase_$p" >/dev/null || die "Unbekannte Phase: $p"

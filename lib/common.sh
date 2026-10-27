@@ -182,10 +182,27 @@ tmysql() {
     "$(mysql_client)" --defaults-extra-file="$TARGET_MY_CNF" "$@"
 }
 
+# TARGET_DB_ENGINE=auto: MySQL 8.x -> MySQL 8.4 (gleiche Kollationen wie
+# utf8mb4_0900_ai_ci, caching_sha2_password, JSON), sonst MariaDB
+resolve_db_engine() {
+    [[ "$TARGET_DB_ENGINE" == auto ]] || return 0
+    local v
+    v=$(inv_get SRC_MYSQL_VERSION)
+    [[ -n "$v" ]] || return 0
+    if [[ "$v" != *MariaDB* && "${v%%.*}" =~ ^[0-9]+$ && ${v%%.*} -ge 8 ]]; then
+        TARGET_DB_ENGINE=mysql84
+    else
+        TARGET_DB_ENGINE=mariadb
+    fi
+    log "Datenbank-Ziel automatisch gewählt: $TARGET_DB_ENGINE (Quelle: $v)"
+}
+
 db_service() {
+    resolve_db_engine
     case "$TARGET_DB_ENGINE" in
     mariadb) echo mariadb ;;
     mysql84) echo mysqld ;;
+    auto) die "TARGET_DB_ENGINE=auto: zuerst 'inventory' ausführen" ;;
     *) die "Unbekannte TARGET_DB_ENGINE: $TARGET_DB_ENGINE" ;;
     esac
 }
