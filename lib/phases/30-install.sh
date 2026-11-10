@@ -151,7 +151,10 @@ configure_postfix() {
     local host
     host=$(inv_get SRC_HOSTNAME)
     run postconf -e "inet_protocols = ipv4"
-    if [[ "$host" == *.* ]]; then
+    if [[ "$host" == *.compute.internal || "$host" == *.ec2.internal ]]; then
+        run postconf -e "myhostname = $host"
+        warn "postfix meldet sich wie der alte Server als '$host' – ein interner AWS-Name, den Spamfilter abwerten. Nach dem Cutover einen echten Namen setzen (postconf -e 'myhostname = www.example.de') und für die Elastic IP Reverse-DNS auf diesen Namen eintragen."
+    elif [[ "$host" == *.* ]]; then
         run postconf -e "myhostname = $host"
     else
         warn "postfix: Hostname der Quelle unbekannt – myhostname bitte manuell setzen (postconf -e myhostname=...)"
