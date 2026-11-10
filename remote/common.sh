@@ -44,6 +44,12 @@ q() {
     "$(mysql_bin)" --defaults-extra-file="$MY_CNF" -N -B -e "$1" </dev/null
 }
 
+# wie q, aber ohne Escaping (-r): für SQL, das wieder ausgeführt wird. Sonst
+# wird z.B. aus GRANT … ON `CCS\_EDI`.* ein falsches `CCS\\_EDI`.
+qraw() {
+    "$(mysql_bin)" --defaults-extra-file="$MY_CNF" -N -B -r -e "$1" </dev/null
+}
+
 # SQL-Stringliteral
 sqlq() {
     local s=${1//\\/\\\\}

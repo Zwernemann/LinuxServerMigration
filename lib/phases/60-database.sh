@@ -49,6 +49,11 @@ phase_database() {
     done
 
     log "Rechte setzen ..."
+    if [[ "$TARGET_DB_ENGINE" == mysql84 ]]; then
+        # SET_USER_ID (MySQL 8.0) gibt es in 8.4 nicht mehr – Nachfolger setzen,
+        # sonst scheitert die ganze GRANT-Zeile von Benutzern mit ALL ON *.*
+        sed -i -E '/^GRANT /s/(^GRANT |,)SET_USER_ID(,| ON )/\1SET_ANY_DEFINER,ALLOW_NONEXISTENT_DEFINER\2/' "$dir/grants.sql"
+    fi
     tmysql --force <"$dir/grants.sql" 2>"$dir/grants.err" || true
     if [[ -s "$dir/grants.err" ]]; then
         warn "$(wc -l <"$dir/grants.err") GRANT-Anweisungen schlugen fehl – siehe $dir/grants.err"

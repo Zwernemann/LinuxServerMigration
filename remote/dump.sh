@@ -67,9 +67,9 @@ accounts)
                     continue
                     ;;
                 esac
-                cu=$(q "SET SESSION print_identified_with_as_hex = ON; SHOW CREATE USER $acct" 2>/dev/null)
+                cu=$(qraw "SET SESSION print_identified_with_as_hex = ON; SHOW CREATE USER $acct" 2>/dev/null)
                 if [ -z "$cu" ] && [ "$plug" != caching_sha2_password ] && [ "$plug" != sha256_password ]; then
-                    cu=$(q "SHOW CREATE USER $acct" 2>/dev/null)
+                    cu=$(qraw "SHOW CREATE USER $acct" 2>/dev/null)
                 fi
                 if [ -n "$cu" ]; then
                     [ -n "$hash" ] || echo "-- WARN: $acct hat KEIN Passwort"
@@ -101,7 +101,7 @@ accounts)
         printf '%s\n' "$users" | while IFS=$'\t' read -r user host hash plug; do
             [ -n "$user" ] || continue
             acct="$(sqlq "$user")@$(sqlq "$host")"
-            q "SHOW GRANTS FOR $acct" | sed -E \
+            qraw "SHOW GRANTS FOR $acct" | sed -E \
                 -e "s/ IDENTIFIED BY PASSWORD ('[^']*'|<secret>)//" \
                 -e 's/$/;/'
         done
