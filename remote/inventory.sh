@@ -129,7 +129,7 @@ if [ -n "$(mysql_bin)" ] && q "SELECT 1" >/dev/null 2>mysql-error.txt; then
     rlog "MySQL ..."
     summary SRC_MYSQL_OK 1
     summary SRC_MYSQL_VERSION "$(q 'SELECT VERSION()')"
-    q "SHOW GLOBAL VARIABLES WHERE Variable_name IN ('sql_mode','character_set_server','collation_server','max_allowed_packet','lower_case_table_names','event_scheduler','innodb_buffer_pool_size','max_connections','wait_timeout','ft_min_word_len','group_concat_max_len','default_storage_engine','time_zone')" >mysql-variables.tsv
+    q "SHOW GLOBAL VARIABLES WHERE Variable_name IN ('datadir','sql_mode','character_set_server','collation_server','max_allowed_packet','lower_case_table_names','event_scheduler','innodb_buffer_pool_size','max_connections','wait_timeout','ft_min_word_len','group_concat_max_len','default_storage_engine','time_zone')" >mysql-variables.tsv
     q "SELECT s.schema_name, COALESCE(SUM(t.data_length + t.index_length), 0)
          FROM information_schema.schemata s
          LEFT JOIN information_schema.tables t ON t.table_schema = s.schema_name

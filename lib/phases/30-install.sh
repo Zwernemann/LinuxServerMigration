@@ -217,6 +217,7 @@ db_install() {
     esac
 
     db_write_config
+    db_datadir
     run systemctl enable --now "$svc"
     db_root_setup
 }
@@ -260,6 +261,53 @@ db_write_config() {
     install_generated "$tmp" /etc/my.cnf.d/99-migration.cnf
     grep -q '^!includedir /etc/my.cnf.d' /etc/my.cnf 2>/dev/null || echo '!includedir /etc/my.cnf.d' >>/etc/my.cnf
     rm -f "$tmp"
+}
+
+# Datenbank-Verzeichnis wie auf der Quelle (z.B. auf der Datenplatte /daten).
+# Bei einer schon laufenden Datenbank wird sie gestoppt und umgezogen; das alte
+# Verzeichnis bleibt bis zum Aufräumen liegen.
+db_datadir() {
+    local want=${TARGET_DB_DATADIR:-auto} cur svc top tmp
+    if [[ "$want" == auto ]]; then
+        want=$(awk -F'\t' '$1 == "datadir" {print $2}' "$(inv_file mysql-variables.tsv)" 2>/dev/null)
+        want=${want%/}
+        [[ -n "$want" && "$want" != /var/lib/mysql ]] || return 0
+        top="/$(cut -d/ -f2 <<<"$want")"
+        if ! mountpoint -q "$top"; then
+            log "Datenbank-Verzeichnis der Quelle ($want) liegt auf $top – auf dem Ziel keine eigene Platte, Standard /var/lib/mysql bleibt."
+            return 0
+        fi
+    fi
+    [[ -n "$want" && "$want" != none ]] || return 0
+    want=${want%/}
+    cur=$(my_print_defaults mysqld 2>/dev/null | sed -n 's/^--datadir=//p' | tail -n 1)
+    cur=${cur%/}
+    cur=${cur:-/var/lib/mysql}
+    [[ "$cur" != "$want" ]] || return 0
+
+    step "Datenbank-Verzeichnis $want"
+    svc=$(db_service)
+    systemctl is-active -q "$svc" && run systemctl stop "$svc"
+    mkdir -p "$want"
+    if [[ -d "$cur" && -n "$(ls -A "$cur" 2>/dev/null)" && -z "$(ls -A "$want" 2>/dev/null)" ]]; then
+        log "Kopiere $cur -> $want ..."
+        run rsync -aX --exclude 'mysql.sock*' --exclude '*.pid' "$cur/" "$want/"
+    fi
+    chown -R mysql:mysql "$want"
+    chmod 751 "$want"
+    if [[ "$(getenforce 2>/dev/null)" == Enforcing ]]; then
+        pkg_install policycoreutils-python-utils
+        semanage fcontext -a -t mysqld_db_t "$want(/.*)?" 2>/dev/null ||
+            semanage fcontext -m -t mysqld_db_t "$want(/.*)?"
+        restorecon -R "$want"
+    fi
+    # "zz-": nach mariadb-server.cnf bzw. my.cnf lesen, damit dieser Wert gilt
+    tmp=$(mktemp)
+    printf '# LinuxServerMigration: Datenbank-Verzeichnis wie auf dem alten Server\n[mysqld]\ndatadir=%s\n' "$want" >"$tmp"
+    install_generated "$tmp" /etc/my.cnf.d/zz-migration-datadir.cnf
+    rm -f "$tmp"
+    [[ "$cur" == "$want" || ! -d "$cur" ]] ||
+        warn "Datenbank liegt jetzt in $want. Die alten Datenbankdateien in $cur werden nicht mehr benutzt und können nach dem Cutover gelöscht werden (das Verzeichnis selbst bleibt, dort liegt mysql.sock)."
 }
 
 # root-Zugang einrichten und in /root/.my.cnf hinterlegen

@@ -47,6 +47,11 @@ TARGET_PHP_VERSION="8.3"
 #              MySQL 8.0 als Quelle: gleiche Kollationen wie utf8mb4_0900_ai_ci,
 #              Benutzer mit caching_sha2_password werden 1:1 übernommen)
 TARGET_DB_ENGINE="auto"
+# Datenbank-Verzeichnis auf dem Ziel:
+#   auto – wie auf der Quelle, wenn es dort auf einer eigenen Platte lag (z.B.
+#          /daten/mysql/mysql) und diese Platte auch auf dem Ziel eingehängt ist
+#   none – Standard (/var/lib/mysql);  oder ein Pfad, z.B. /daten/mysql/mysql
+TARGET_DB_DATADIR="auto"
 MYSQL84_REPO_RPM="https://dev.mysql.com/get/mysql84-community-release-el9-1.noarch.rpm"
 
 # root-Passwort der neuen Datenbank.
