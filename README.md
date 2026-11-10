@@ -58,7 +58,15 @@ Grenzen:
 > Sie erklärt Schritt für Schritt, wer was macht, wie du auf die Server
 > kommst und wo das MySQL-Passwort steht.
 
-### Empfohlen: alles aus der AWS CloudShell
+### Standard: alles aus der AWS CloudShell
+
+Vor dem Start auf dem alten Server die Bestandsaufnahme laufen lassen. Sie
+zeigt SSH-Port, Platten, Cronjobs, PHP- und MySQL-Versionen, also alles, was
+in den `provision-target.sh`-Aufruf gehört:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Zwernemann/LinuxServerMigration/main/tools/bestandsaufnahme.sh | sudo bash | tee ~/bestand.txt
+```
 
 ```bash
 # AWS-Konsole -> CloudShell-Symbol >_ (Region des alten Servers)
@@ -86,7 +94,11 @@ erstellt die `migration.conf` vor. Danach geht es mit
 [Schritt 4](#4-migration-durchführen-der-alte-server-läuft-weiter) weiter;
 am neuen Server meldest du dich im Browser über den Session Manager an.
 
-### Manuell
+### Manuell (nur im Notfall)
+
+Der Standard ist der CloudShell-Weg oben: ein Befehl, keine Klicks in der
+EC2-Konsole. Der folgende Weg ist nur für Sonderfälle gedacht, z.B. wenn
+kein Zugriff auf die CloudShell besteht.
 
 #### 1. Neuen Server anlegen
 
