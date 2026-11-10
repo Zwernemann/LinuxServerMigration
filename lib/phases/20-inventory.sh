@@ -22,7 +22,7 @@ phase_inventory() {
     log "Hole Konfigurations-Schnappschuss ..."
     mkdir -p "$(snap /)"
     # shellcheck disable=SC2086,SC2116  # echo: Zeilenumbrüche -> Leerzeichen
-    existing=$(src_ssh "for p in $(echo $SNAPSHOT_PATHS); do if [ -d \"\$p\" ]; then echo \"d:\$p\"; elif [ -e \"\$p\" ]; then echo \"f:\$p\"; fi; done" || true)
+    existing=$(src_ssh "sudo -n sh -c 'for p in $(echo $SNAPSHOT_PATHS); do if [ -d \"\$p\" ]; then echo \"d:\$p\"; elif [ -e \"\$p\" ]; then echo \"f:\$p\"; fi; done'" || true)
     for p in $existing; do
         if [[ "$p" == d:* ]]; then
             p=${p#d:}
@@ -36,6 +36,7 @@ phase_inventory() {
     done
     chmod -R go-rwx "$(snap /)"
 
+    resolve_db_engine
     inventory_summary
 }
 
@@ -61,6 +62,11 @@ inventory_summary() {
         echo
     } | tee -a "$LOG_FILE" >&2
 
+    local sv8
+    sv8=$(inv_get SRC_MYSQL_VERSION)
+    if [[ "$TARGET_DB_ENGINE" == mariadb && "$sv8" != *MariaDB* && "${sv8%%.*}" =~ ^[0-9]+$ && ${sv8%%.*} -ge 8 ]]; then
+        warn "Quelle ist MySQL $sv8, Ziel MariaDB: Kollationen wie utf8mb4_0900_ai_ci und caching_sha2_password-Konten gibt es dort nicht – TARGET_DB_ENGINE=\"mysql84\" (oder \"auto\") empfohlen."
+    fi
     f=$(inv_file mysql-engines.tsv)
     if [[ -f "$f" ]] && awk -F'\t' '$2=="MyISAM" && $1!="mysql"' "$f" | grep -q .; then
         warn "MyISAM-Tabellen gefunden ($(awk -F'\t' '$2=="MyISAM" && $1!="mysql" {printf "%s ", $1}' "$f")) – Dumps sind nur bei gestoppter Anwendung konsistent (passiert beim Cutover automatisch)."

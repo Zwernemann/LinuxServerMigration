@@ -18,7 +18,7 @@ phase_database() {
     mapfile -t dbs < <(db_list)
 
     step "Export auf der Quelle"
-    src_run DUMP_MODE=accounts "DB_USER_EXCLUDE=$DB_USER_EXCLUDE" "${sv[@]}" -- "$TOOL_DIR/remote/dump.sh" \
+    src_run DUMP_MODE=accounts "DB_USER_EXCLUDE=$DB_USER_EXCLUDE" "TARGET_DB_ENGINE=$TARGET_DB_ENGINE" "${sv[@]}" -- "$TOOL_DIR/remote/dump.sh" \
         >"$dir/accounts.sql" || die "Export der MySQL-Benutzer fehlgeschlagen."
     awk -v u="$dir/users.sql" -v g="$dir/grants.sql" '/^-- @@GRANTS@@/ {gr=1} {print > (gr ? g : u)}' "$dir/accounts.sql"
     { grep '^-- WARN' "$dir/accounts.sql" || true; } | sed 's/^-- WARN: //' | while IFS= read -r n; do warn "MySQL-Benutzer: $n"; done
@@ -49,6 +49,11 @@ phase_database() {
     done
 
     log "Rechte setzen ..."
+    if [[ "$TARGET_DB_ENGINE" == mysql84 ]]; then
+        # SET_USER_ID (MySQL 8.0) gibt es in 8.4 nicht mehr – Nachfolger setzen,
+        # sonst scheitert die ganze GRANT-Zeile von Benutzern mit ALL ON *.*
+        sed -i -E '/^GRANT /s/(^GRANT |,)SET_USER_ID(,| ON )/\1SET_ANY_DEFINER,ALLOW_NONEXISTENT_DEFINER\2/' "$dir/grants.sql"
+    fi
     tmysql --force <"$dir/grants.sql" 2>"$dir/grants.err" || true
     if [[ -s "$dir/grants.err" ]]; then
         warn "$(wc -l <"$dir/grants.err") GRANT-Anweisungen schlugen fehl – siehe $dir/grants.err"

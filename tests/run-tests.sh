@@ -72,6 +72,23 @@ if [[ $(grep -c upload_max_filesize "$U") == 1 ]]; then ok "idempotent"; else no
 tools/apache24-convert.sh -i "$T/www/app/.htaccess" 2>/dev/null
 expect ".htaccess Zugriffsregeln konvertiert" "$T/www/app/.htaccess" '^    Require all denied$'
 
+echo "== Generierte Dateien (install_generated)"
+(
+    WORK_DIR="$T/work" LOG_FILE="$T/gen.log"
+    mkdir -p "$WORK_DIR"; touch "$WORK_DIR/warnings.log"
+    # shellcheck source=lib/common.sh disable=SC2034
+    source lib/common.sh
+    d="$T/etc/test.conf"
+    echo v1 >"$T/new"; install_generated "$T/new" "$d" 0644 "$(id -un):$(id -gn)" 2>/dev/null
+    echo v2 >"$T/new"; install_generated "$T/new" "$d" 0644 "$(id -un):$(id -gn)" 2>/dev/null
+    grep -qx v2 "$d" || exit 1                                   # unverändert -> aktualisiert
+    echo manuell >"$d"; install_generated "$T/new" "$d" 2>/dev/null
+    grep -qx manuell "$d" && [ -f "$d.migration-new" ] || exit 2 # manuell geändert -> bleibt
+    rm -f "$d" "$d.migration-new"; install_generated "$T/new" "$d" 2>/dev/null
+    [ ! -e "$d" ] || exit 3                                      # gelöscht -> bleibt gelöscht
+)
+case $? in 0) ok "aktualisieren / manuelle Änderung behalten / Löschung respektieren" ;; *) nok "install_generated (Fall $?)" ;; esac
+
 echo "== PHP-8-Scan"
 tools/php8-compat-scan.sh -o "$T/scan.md" tests/fixtures/php >/dev/null
 rc=$?
@@ -91,9 +108,9 @@ ok "bash -n (lokal)"
 if command -v docker >/dev/null && docker info >/dev/null 2>&1; then
     if docker image inspect amazonlinux:2018.03 >/dev/null 2>&1; then
         echo "== Quell-Skripte unter Amazon Linux 2018.03 (bash 4.2)"
-        out=$( { echo 'PHP_INI_KEYS="memory_limit"'; cat remote/common.sh remote/inventory.sh; } |
+        invout=$( { echo 'PHP_INI_KEYS="memory_limit"'; cat remote/common.sh remote/inventory.sh; } |
             docker run --rm -i amazonlinux:2018.03 bash -s 2>"$T/al1.err" | tar -tzf - 2>&1)
-        if grep -q summary.env <<<"$out"; then ok "inventory.sh läuft unter bash $(docker run --rm amazonlinux:2018.03 bash -c 'echo $BASH_VERSION')"
+        if grep -q summary.env <<<"$invout"; then ok "inventory.sh läuft unter bash $(docker run --rm amazonlinux:2018.03 bash -c 'echo $BASH_VERSION')"
         else nok "inventory.sh unter AL2018: $(tail -3 "$T/al1.err")"; fi
         if docker run --rm -v "$ROOT:/m:ro" amazonlinux:2018.03 bash -c 'for f in /m/remote/*.sh; do bash -n "$f" || exit 1; done'; then
             ok "bash -n remote/*.sh unter bash 4.2"; else nok "bash -n unter bash 4.2"; fi

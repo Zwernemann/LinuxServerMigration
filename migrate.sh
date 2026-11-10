@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  LinuxServerMigration – Amazon Linux AMI 2018.03  ──►  Amazon Linux 2023
+#  LinuxServerMigration – Amazon Linux AMI 2018.03 / Amazon Linux 2  ──►  Amazon Linux 2023
 #  Apache + PHP + MySQL, vollautomatisch.
 #
 #  Läuft als root auf dem NEUEN Server und holt alles per SSH/rsync vom alten.
@@ -61,7 +61,10 @@ for f in "$TOOL_DIR"/lib/phases/*.sh; do
     source "$f"
 done
 
-trap 'die "Abbruch in Zeile $LINENO (Phase ${CURRENT_PHASE:-?}): $BASH_COMMAND"' ERR
+# Nur in der Haupt-Shell abbrechen: In Prozess-/Befehlsersetzungen ist z.B.
+# ein grep ohne Treffer kein Fehler – schlägt dort wirklich etwas fehl,
+# bemerkt es die Haupt-Shell am Ergebnis.
+trap '(( BASH_SUBSHELL )) || die "Abbruch in Zeile $LINENO (Phase ${CURRENT_PHASE:-?}): $BASH_COMMAND"' ERR
 
 ALL_PHASES=(preflight inventory install users files database configure verify)
 expanded=()
@@ -71,12 +74,16 @@ done
 
 [[ $EUID -eq 0 ]] || die "Bitte als root ausführen: sudo $0 ${phases[*]}"
 init_ssh
+resolve_db_engine 2>/dev/null || true
 
 for p in "${expanded[@]}"; do
     declare -F "phase_$p" >/dev/null || die "Unbekannte Phase: $p"
 done
 for p in "${expanded[@]}"; do
     CURRENT_PHASE=$p
+    # Alte Warnungen dieser Phase ersetzen
+    awk -F'\t' -v p="$p" '$2 != p' "$WORK_DIR/warnings.log" >"$WORK_DIR/warnings.log.tmp" &&
+        mv -f "$WORK_DIR/warnings.log.tmp" "$WORK_DIR/warnings.log"
     start=$SECONDS
     step "Phase: $p"
     "phase_$p"

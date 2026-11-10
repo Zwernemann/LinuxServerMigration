@@ -7,7 +7,7 @@ php_module_map() {
     case "$1" in
     core | date | filter | hash | json | libxml | openssl | pcre | reflection | session | spl | standard | \
         zlib | ctype | curl | exif | fileinfo | ftp | gettext | iconv | phar | sockets | tokenizer | \
-        calendar | bz2 | readline | mhash | random | cgi-fcgi | zend\ opcache | apache2handler)
+        calendar | bz2 | readline | mhash | random | cgi-fcgi | zend\ opcache | apache2handler | pcntl)
         [[ "$1" == "zend opcache" ]] && echo pkg:opcache || echo builtin ;;
     mysqli | mysqlnd | pdo_mysql) echo pkg:mysqlnd ;;
     pdo | pdo_sqlite | sqlite3) echo pkg:pdo ;;
@@ -57,6 +57,14 @@ phase_install() {
 
     step "Basis-Pakete"
     pkg_install httpd mod_ssl cronie rsync tar gzip logrotate openssl findutils which procps-ng
+    if [[ -n "${EXTRA_PACKAGES// /}" ]]; then
+        local extra=()
+        for p in $EXTRA_PACKAGES; do
+            if pkg_available "$p"; then extra+=("$p"); else warn "Zusatzpaket '$p' ist in AL2023 nicht verfügbar"; fi
+        done
+        pkg_install "${extra[@]}"
+    fi
+    configure_snail
 
     step "PHP $v"
     if ! pkg_available "php$v"; then
@@ -116,7 +124,9 @@ phase_install() {
     mta=$(inv_get SRC_MTA)
     if [[ "$INSTALL_MTA" == yes || ("$INSTALL_MTA" == auto && "$mta" != none && -n "$mta") ]]; then
         pkg_install postfix
+        configure_postfix
         run systemctl enable --now postfix
+        run systemctl restart postfix
     else
         log "Kein Mailserver (Quelle: ${mta:-?}, INSTALL_MTA=$INSTALL_MTA)."
     fi
@@ -130,8 +140,35 @@ phase_install() {
 
     step "Dienste aktivieren"
     run systemctl enable --now php-fpm
-    run systemctl enable --now crond
+    cron_service
     run systemctl enable httpd   # Start erst nach der Konfiguration
+}
+
+# postfix wie den alten Mailserver auftreten lassen: gleicher Hostname im
+# HELO/Absender, und nur IPv4 – EC2-IPv6-Adressen haben meist kein
+# Reverse-DNS, große Anbieter (z.B. Microsoft 365) lehnen das ab.
+configure_postfix() {
+    local host
+    host=$(inv_get SRC_HOSTNAME)
+    run postconf -e "inet_protocols = ipv4"
+    if [[ "$host" == *.compute.internal || "$host" == *.ec2.internal ]]; then
+        run postconf -e "myhostname = $host"
+        warn "postfix meldet sich wie der alte Server als '$host' – ein interner AWS-Name, den Spamfilter abwerten. Nach dem Cutover einen echten Namen setzen (postconf -e 'myhostname = www.example.de') und für die Elastic IP Reverse-DNS auf diesen Namen eintragen."
+    elif [[ "$host" == *.* ]]; then
+        run postconf -e "myhostname = $host"
+    else
+        warn "postfix: Hostname der Quelle unbekannt – myhostname bitte manuell setzen (postconf -e myhostname=...)"
+    fi
+    log "postfix: Ausgehende Mails gehen direkt über Port 25. Falls Mails nicht ankommen: AWS blockiert Port 25 standardmäßig (Freigabe beantragen oder Amazon SES als Relay nutzen)."
+}
+
+# s-nail (Nachfolger von mailx/"mail" auf AL2023) lehnt in alten Skripten
+# übliche MTA-Argumente wie "mail … -- -r absender@domain" ab
+configure_snail() {
+    [[ -f /etc/s-nail.rc ]] || return 0
+    grep -qE '^[[:space:]]*set[[:space:]]+expandargv' /etc/s-nail.rc && return 0
+    printf '\n# LinuxServerMigration: "mail … -- -r absender" wie mit mailx erlauben\nset expandargv\n' >>/etc/s-nail.rc
+    log "s-nail: MTA-Argumente (mail … -- -r …) wie beim alten mailx erlaubt"
 }
 
 install_pecl() {
@@ -183,6 +220,7 @@ db_install() {
     esac
 
     db_write_config
+    db_datadir
     run systemctl enable --now "$svc"
     db_root_setup
 }
@@ -226,6 +264,53 @@ db_write_config() {
     install_generated "$tmp" /etc/my.cnf.d/99-migration.cnf
     grep -q '^!includedir /etc/my.cnf.d' /etc/my.cnf 2>/dev/null || echo '!includedir /etc/my.cnf.d' >>/etc/my.cnf
     rm -f "$tmp"
+}
+
+# Datenbank-Verzeichnis wie auf der Quelle (z.B. auf der Datenplatte /daten).
+# Bei einer schon laufenden Datenbank wird sie gestoppt und umgezogen; das alte
+# Verzeichnis bleibt bis zum Aufräumen liegen.
+db_datadir() {
+    local want=${TARGET_DB_DATADIR:-auto} cur svc top tmp
+    if [[ "$want" == auto ]]; then
+        want=$(awk -F'\t' '$1 == "datadir" {print $2}' "$(inv_file mysql-variables.tsv)" 2>/dev/null)
+        want=${want%/}
+        [[ -n "$want" && "$want" != /var/lib/mysql ]] || return 0
+        top="/$(cut -d/ -f2 <<<"$want")"
+        if ! mountpoint -q "$top"; then
+            log "Datenbank-Verzeichnis der Quelle ($want) liegt auf $top – auf dem Ziel keine eigene Platte, Standard /var/lib/mysql bleibt."
+            return 0
+        fi
+    fi
+    [[ -n "$want" && "$want" != none ]] || return 0
+    want=${want%/}
+    cur=$(my_print_defaults mysqld 2>/dev/null | sed -n 's/^--datadir=//p' | tail -n 1)
+    cur=${cur%/}
+    cur=${cur:-/var/lib/mysql}
+    [[ "$cur" != "$want" ]] || return 0
+
+    step "Datenbank-Verzeichnis $want"
+    svc=$(db_service)
+    systemctl is-active -q "$svc" && run systemctl stop "$svc"
+    mkdir -p "$want"
+    if [[ -d "$cur" && -n "$(ls -A "$cur" 2>/dev/null)" && -z "$(ls -A "$want" 2>/dev/null)" ]]; then
+        log "Kopiere $cur -> $want ..."
+        run rsync -aX --exclude 'mysql.sock*' --exclude '*.pid' "$cur/" "$want/"
+    fi
+    chown -R mysql:mysql "$want"
+    chmod 751 "$want"
+    if [[ "$(getenforce 2>/dev/null)" == Enforcing ]]; then
+        pkg_install policycoreutils-python-utils
+        semanage fcontext -a -t mysqld_db_t "$want(/.*)?" 2>/dev/null ||
+            semanage fcontext -m -t mysqld_db_t "$want(/.*)?"
+        restorecon -R "$want"
+    fi
+    # "zz-": nach mariadb-server.cnf bzw. my.cnf lesen, damit dieser Wert gilt
+    tmp=$(mktemp)
+    printf '# LinuxServerMigration: Datenbank-Verzeichnis wie auf dem alten Server\n[mysqld]\ndatadir=%s\n' "$want" >"$tmp"
+    install_generated "$tmp" /etc/my.cnf.d/zz-migration-datadir.cnf
+    rm -f "$tmp"
+    [[ "$cur" == "$want" || ! -d "$cur" ]] ||
+        warn "Datenbank liegt jetzt in $want. Die alten Datenbankdateien in $cur werden nicht mehr benutzt und können nach dem Cutover gelöscht werden (das Verzeichnis selbst bleibt, dort liegt mysql.sock)."
 }
 
 # root-Zugang einrichten und in /root/.my.cnf hinterlegen

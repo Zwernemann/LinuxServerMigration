@@ -139,6 +139,11 @@ install_generated() {
     local new=$1 dest=$2 mode=${3:-0644} owner=${4:-root:root}
     local ref="$WORK_DIR/generated$dest"
     mkdir -p "$(dirname "$ref")" "$(dirname "$dest")"
+    # Früher erzeugt und danach von Hand gelöscht: bewusst so lassen
+    if [[ ! -e "$dest" && -f "$ref" ]]; then
+        log "$dest wurde gelöscht – wird nicht neu angelegt (zum Wiederherstellen: rm $ref)"
+        return 0
+    fi
     if [[ -e "$dest" ]] && ! { [[ -f "$ref" ]] && cmp -s "$dest" "$ref"; }; then
         if cmp -s "$dest" "$new"; then
             cp -f "$new" "$ref"
@@ -155,6 +160,23 @@ install_generated() {
 }
 
 # ---------------------------------------------------------------------------
+# cron auf dem Ziel erst nach dem Cutover (sonst laufen Jobs doppelt)
+cron_allowed() {
+    is_yes "${CRON_BEFORE_CUTOVER:-no}" || [[ -f "$WORK_DIR/cutover.done" ]]
+}
+
+cron_service() {
+    if cron_allowed; then
+        run systemctl enable crond
+        run systemctl restart crond
+    else
+        run systemctl enable crond
+        run systemctl stop crond
+        log "cron ist bis zum Cutover pausiert (Jobs liefen sonst doppelt auf altem und neuem Server)."
+    fi
+}
+
+# ---------------------------------------------------------------------------
 # Datenbank auf dem Ziel
 # ---------------------------------------------------------------------------
 TARGET_MY_CNF=/root/.my.cnf
@@ -165,10 +187,27 @@ tmysql() {
     "$(mysql_client)" --defaults-extra-file="$TARGET_MY_CNF" "$@"
 }
 
+# TARGET_DB_ENGINE=auto: MySQL 8.x -> MySQL 8.4 (gleiche Kollationen wie
+# utf8mb4_0900_ai_ci, caching_sha2_password, JSON), sonst MariaDB
+resolve_db_engine() {
+    [[ "$TARGET_DB_ENGINE" == auto ]] || return 0
+    local v
+    v=$(inv_get SRC_MYSQL_VERSION)
+    [[ -n "$v" ]] || return 0
+    if [[ "$v" != *MariaDB* && "${v%%.*}" =~ ^[0-9]+$ && ${v%%.*} -ge 8 ]]; then
+        TARGET_DB_ENGINE=mysql84
+    else
+        TARGET_DB_ENGINE=mariadb
+    fi
+    log "Datenbank-Ziel automatisch gewählt: $TARGET_DB_ENGINE (Quelle: $v)"
+}
+
 db_service() {
+    resolve_db_engine
     case "$TARGET_DB_ENGINE" in
     mariadb) echo mariadb ;;
     mysql84) echo mysqld ;;
+    auto) die "TARGET_DB_ENGINE=auto: zuerst 'inventory' ausführen" ;;
     *) die "Unbekannte TARGET_DB_ENGINE: $TARGET_DB_ENGINE" ;;
     esac
 }

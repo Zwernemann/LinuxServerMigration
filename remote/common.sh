@@ -44,6 +44,12 @@ q() {
     "$(mysql_bin)" --defaults-extra-file="$MY_CNF" -N -B -e "$1" </dev/null
 }
 
+# wie q, aber ohne Escaping (-r): für SQL, das wieder ausgeführt wird. Sonst
+# wird z.B. aus GRANT … ON `db\_name`.* ein falsches `db\\_name`.
+qraw() {
+    "$(mysql_bin)" --defaults-extra-file="$MY_CNF" -N -B -r -e "$1" </dev/null
+}
+
 # SQL-Stringliteral
 sqlq() {
     local s=${1//\\/\\\\}

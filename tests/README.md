@@ -4,6 +4,7 @@
 |---|---|---|
 | `tests/run-tests.sh` | bash, optional shellcheck und Docker | Apache-Konvertierung, `.user.ini`, PHP-8-Scan, Bash-4.2-Kompatibilität (Image `amazonlinux:2018.03`), `httpd -t` mit Apache 2.4 (Image `httpd:2.4`) |
 | `tests/db-roundtrip.sh` | Docker | Export von MySQL 5.6 und Import in MariaDB 10.11 und MySQL 8.4: Daten (bytegenau), Routinen, Trigger, Views, Benutzer mit Passwort-Hash, Rechte, Zeilenzahl-Vergleich |
+| `tests/db-mysql8.sh` | Docker | MySQL 8.0 (mit GTIDs) → MySQL 8.4: `utf8mb4_0900_ai_ci`, JSON samt funktionalem Index, `caching_sha2_password`-Benutzer mit altem Passwort, zweiter Import wie beim Cutover |
 | `tests/e2e-ssh.sh` | Docker, Image `migtest-base` | `migrate.sh inventory users files database configure verify` über echtes SSH, sudo und rsync zwischen zwei Containern, danach ein zweiter Lauf (Wiederholbarkeit) |
 
 Amazon-Linux-Container können ohne Internetzugang keine Pakete installieren.
