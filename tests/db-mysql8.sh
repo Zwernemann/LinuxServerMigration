@@ -37,8 +37,8 @@ CREATE USER 'alt'@'localhost' IDENTIFIED WITH mysql_native_password BY 'alt123';
 GRANT ALL ON shop.* TO 'magento'@'localhost', 'magento'@'%';
 GRANT SELECT ON shop.produkte TO 'alt'@'localhost';
 -- phpMyAdmin-Stil: Unterstrich maskiert; Admin mit ALL ON *.* (enthält SET_USER_ID)
-CREATE DATABASE CCS_EDI; CREATE TABLE CCS_EDI.t (id INT);
-CREATE USER 'edi'@'%' IDENTIFIED BY 'edi-pw'; GRANT ALL ON `CCS\_EDI`.* TO 'edi'@'%';
+CREATE DATABASE EDI_DB; CREATE TABLE EDI_DB.t (id INT);
+CREATE USER 'edi'@'%' IDENTIFIED BY 'edi-pw'; GRANT ALL ON `EDI\_DB`.* TO 'edi'@'%';
 CREATE USER 'admin'@'%' IDENTIFIED BY 'adm-pw'; GRANT ALL ON *.* TO 'admin'@'%' WITH GRANT OPTION;
 SQL
 
@@ -56,7 +56,7 @@ for run in 1 2; do
     src DUMP_MODE=accounts TARGET_DB_ENGINE=mysql84 "DB_USER_EXCLUDE=root mysql.sys mysql.session mysql.infoschema" >"$OUT/accounts.sql"
     awk -v u="$OUT/users.sql" -v g="$OUT/grants.sql" '/^-- @@GRANTS@@/ {gr=1} {print > (gr ? g : u)}' "$OUT/accounts.sql"
     src DUMP_MODE=db DUMP_DB=shop >"$OUT/shop.sql.gz"
-    src DUMP_MODE=db DUMP_DB=CCS_EDI >"$OUT/edi.sql.gz"
+    src DUMP_MODE=db DUMP_DB=EDI_DB >"$OUT/edi.sql.gz"
     if zcat "$OUT/shop.sql.gz" | grep -q 'GTID_PURGED'; then echo 'FEHLER: GTID_PURGED im Dump'; exit 1; fi
     tgt <"$OUT/users.sql"
     zcat "$OUT/shop.sql.gz" | tgt --max-allowed-packet=1G
@@ -77,8 +77,8 @@ q="SELECT MD5(GROUP_CONCAT(id, HEX(name), daten ORDER BY id)) FROM shop.produkte
 [[ "$(docker exec m8-tgt mysql -uroot -ptgt -N -e "$q" 2>/dev/null)" == "$(docker exec m8-src mysql -uroot -psrc -N -e "$q" 2>/dev/null)" ]] &&
     echo "ok   Daten inkl. JSON und Emoji identisch"
 docker exec m8-tgt mysql -uroot -ptgt -N -e "SELECT sku FROM shop.v WHERE id=1" 2>/dev/null | grep -qx 'A-1' && echo "ok   View mit JSON-Ausdruck funktioniert"
-docker exec m8-tgt mysql -uedi -pedi-pw -N -e "SELECT COUNT(*) FROM CCS_EDI.t" 2>/dev/null | grep -qx 0 &&
-    echo "ok   maskierter Unterstrich (CCS\\_EDI) korrekt übernommen"
+docker exec m8-tgt mysql -uedi -pedi-pw -N -e "SELECT COUNT(*) FROM EDI_DB.t" 2>/dev/null | grep -qx 0 &&
+    echo "ok   maskierter Unterstrich (EDI\\_DB) korrekt übernommen"
 docker exec m8-tgt mysql -uroot -ptgt -N -e "SHOW GRANTS FOR 'admin'@'%'" 2>/dev/null | grep -q SET_ANY_DEFINER &&
     echo "ok   SET_USER_ID -> SET_ANY_DEFINER (Admin-Rechte vollständig)"
 echo "== OK"

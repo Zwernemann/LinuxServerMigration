@@ -79,7 +79,7 @@ Beispiel mit abweichendem SSH-Port, fester Instanzgröße, eigener Datenplatte
 und Zusatzeinstellungen:
 
 ```bash
-bash aws/provision-target.sh --old-instance i-0abc123def4567890 --src-ssh-port 22978 \
+bash aws/provision-target.sh --old-instance i-0abc123def4567890 --src-ssh-port <PORT> \
   --instance-type t3.micro --data-volume 30:/daten \
   --conf 'EXTRA_PACKAGES=mc s-nail' --conf 'EXTRA_PATHS=/batchfiles /daten/certs'
 ```

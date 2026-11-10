@@ -1,6 +1,6 @@
 # Hinweise für Claude (verbindlich für jede Migration mit diesem Repository)
 
-## Arbeitsweise mit Martin (Wunsch des Nutzers)
+## Arbeitsweise (Wunsch des Nutzers)
 
 - **Jede neue Migration beginnt direkt in der AWS CloudShell mit
   `aws/provision-target.sh`.** Keine Anleitung zum Anlegen von Instanzen,
@@ -49,10 +49,13 @@ curl -fsSL https://raw.githubusercontent.com/Zwernemann/LinuxServerMigration/mai
 
 ## Erfahrungen aus echten Umzügen (bereits im Tool umgesetzt)
 
-- SSH auf Nicht-Standard-Port (22978): `--src-ssh-port`, neuer Server übernimmt ihn.
+- SSH auf Nicht-Standard-Port: `--src-ssh-port`, neuer Server übernimmt ihn.
+  Konkrete Ports, IPs, Instance-IDs, Domains, Benutzernamen oder Passwörter
+  von Kundenservern **nie** in Dateien dieses (öffentlichen) Repositorys
+  oder in Commit-Nachrichten schreiben – nur Platzhalter wie `<PORT>`.
 - PuTTY-Schlüssel stehen oft nur in `~ec2-user/.ssh/authorized_keys` → werden übernommen.
 - MySQL 8.0 → **MySQL 8.4** (nicht MariaDB): `TARGET_DB_ENGINE=auto`;
-  `SET_USER_ID` → `SET_ANY_DEFINER`; GRANTs roh exportieren (`CCS\_EDI`).
+  `SET_USER_ID` → `SET_ANY_DEFINER`; GRANTs roh exportieren (`db\_name` mit maskiertem Unterstrich).
 - Datenbank auf Datenplatte wie zuvor: `TARGET_DB_DATADIR=auto`.
 - cron startet erst beim Cutover (sonst doppelte Erinnerungsmails).
 - acme.sh in `/root/.acme.sh` wird übernommen; nicht mehr genutzte Domains

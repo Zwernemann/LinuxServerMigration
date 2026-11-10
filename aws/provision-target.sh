@@ -5,7 +5,7 @@
 #  aws-cli und Zugangsdaten sind dort schon vorhanden).
 #
 #    bash aws/provision-target.sh --old-instance i-0123456789abcdef0
-#    bash aws/provision-target.sh --old-ip 54.72.0.198 --src-ssh-port 22978 \
+#    bash aws/provision-target.sh --old-ip 203.0.113.10 --src-ssh-port <PORT> \
 #         --instance-type t3.micro --data-volume 30:/daten \
 #         --conf 'EXTRA_PACKAGES=mc s-nail' --conf 'EXTRA_PATHS=/batchfiles'
 #

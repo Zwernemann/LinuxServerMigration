@@ -270,9 +270,9 @@ in der EC2-Konsole beim alten Server unter *Schlüsselpaarname*.
   `.pem`-Datei hochladen, dann wie bei Mac/Linux.
 
 **SSH läuft nicht auf Port 22?** Viele Server verwenden einen anderen Port,
-z.B. `ssh -p 22978 …`. Dann in `/opt/linuxservermigration/migration.conf`
-`SRC_SSH_PORT="22978"` eintragen und `provision-target.sh` mit
-`--src-ssh-port 22978` aufrufen.
+z.B. `ssh -p <PORT> …`. Dann in `/opt/linuxservermigration/migration.conf`
+`SRC_SSH_PORT="<PORT>"` eintragen und `provision-target.sh` mit
+`--src-ssh-port <PORT>` aufrufen.
 
 Kommt keine Verbindung zustande, erlaubt die Security Group des alten Servers
 wahrscheinlich kein SSH von deiner IP. Dann in der EC2-Konsole unter
