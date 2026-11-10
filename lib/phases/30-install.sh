@@ -64,6 +64,7 @@ phase_install() {
         done
         pkg_install "${extra[@]}"
     fi
+    configure_snail
 
     step "PHP $v"
     if ! pkg_available "php$v"; then
@@ -156,6 +157,15 @@ configure_postfix() {
         warn "postfix: Hostname der Quelle unbekannt – myhostname bitte manuell setzen (postconf -e myhostname=...)"
     fi
     log "postfix: Ausgehende Mails gehen direkt über Port 25. Falls Mails nicht ankommen: AWS blockiert Port 25 standardmäßig (Freigabe beantragen oder Amazon SES als Relay nutzen)."
+}
+
+# s-nail (Nachfolger von mailx/"mail" auf AL2023) lehnt in alten Skripten
+# übliche MTA-Argumente wie "mail … -- -r absender@domain" ab
+configure_snail() {
+    [[ -f /etc/s-nail.rc ]] || return 0
+    grep -qE '^[[:space:]]*set[[:space:]]+expandargv' /etc/s-nail.rc && return 0
+    printf '\n# LinuxServerMigration: "mail … -- -r absender" wie mit mailx erlauben\nset expandargv\n' >>/etc/s-nail.rc
+    log "s-nail: MTA-Argumente (mail … -- -r …) wie beim alten mailx erlaubt"
 }
 
 install_pecl() {
