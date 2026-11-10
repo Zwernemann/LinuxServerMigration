@@ -33,7 +33,7 @@ ssh-keygen -q -t ed25519 -N '' -f "$K/id" 2>/dev/null || docker run --rm -v "$K:
 wait_db() {
     local _
     for _ in $(seq 1 90); do
-        docker exec "$1" mysql -uroot -p"$2" -e 'SELECT 1' >/dev/null 2>&1 && return 0
+        docker exec "$1" mysql -uroot -p"$2" -h127.0.0.1 -e 'SELECT 1' >/dev/null 2>&1 && return 0
         sleep 2
     done
     docker logs "$1" | tail -20

@@ -20,7 +20,7 @@ docker network create "$NET" >/dev/null
 wait_db() { # wait_db <container> <client>
     local _
     for _ in $(seq 1 90); do
-        docker exec "$1" sh -c "$2 -uroot -p\"\$MYSQL_ROOT_PASSWORD\" -e 'SELECT 1'" >/dev/null 2>&1 && return 0
+        docker exec "$1" sh -c "$2 -uroot -p\"\$MYSQL_ROOT_PASSWORD\" -h127.0.0.1 -e 'SELECT 1'" >/dev/null 2>&1 && return 0
         sleep 2
     done
     docker logs "$1" | tail -20
