@@ -146,6 +146,7 @@ docker cp "$ROOT" "$TGT:/opt/migration"
 docker cp "$K/id" "$TGT:/root/migration_key"
 docker exec -i "$TGT" bash -e <<'EOF'
 printf '[client]\nuser=root\npassword="tgtR00t!"\n' >/root/.my.cnf
+useradd -m ec2-user
 chmod 600 /root/.my.cnf /root/migration_key
 mkdir -p /run/php-fpm && php-fpm -D && httpd -k start
 cat >/opt/migration/migration.conf <<'CONF'
@@ -175,8 +176,9 @@ t() { if docker exec "$TGT" bash -c "$2" >/dev/null 2>&1; then echo "  ok   $1";
 t "Benutzer webdev mit UID 1501"           'id -u webdev | grep -qx 1501'
 t "Gruppe webteam (GID 1510) mit Mitgliedern" 'getent group webteam | grep -q "^webteam:x:1510:.*webdev"'
 t "Systembenutzer (UID < UID_MIN) nicht übernommen" '! grep -q "useradd.* nginx$\|useradd.* mysql$" /var/log/server-migration/*.log'
-t "ec2-user nicht neu angelegt"             '! id ec2-user'
+t "ec2-user nicht neu angelegt"             '[ "$(id -u ec2-user)" != 500 ]'
 t "Passwort-Hash übernommen"                'grep -qF "webdev:\$6\$salt\$abc" /etc/shadow'
+t "SSH-Schlüssel von ec2-user übernommen"   'grep -q "^ssh-ed25519 " /home/ec2-user/.ssh/authorized_keys && [ "$(stat -c %a /home/ec2-user/.ssh/authorized_keys)" = 600 ]'
 t "Home-Verzeichnis kopiert"                'grep -q "nur auf der Quelle" /home/webdev/notiz.txt'
 t "Webdateien mit Eigentümer"               '[ "$(stat -c %U /var/www/example/index.php)" = webdev ]'
 t ".htaccess: php_value -> .user.ini"       'grep -qx "upload_max_filesize = 48M" /var/www/example/.user.ini'

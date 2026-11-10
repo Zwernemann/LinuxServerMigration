@@ -53,6 +53,7 @@ phase_files() {
         # ec2-user/.ssh nicht überschreiben – sonst sperrt man sich aus.
         sync_dir "${excl[@]}" --exclude '/ec2-user/.ssh/' --exclude '/ec2-user/.bash_history' \
             "$SRC:/home/" /home/
+        merge_ec2user_keys
     fi
 
     step "Zertifikate und weitere Pfade"
@@ -80,6 +81,24 @@ phase_files() {
     webroot_adjust
     acmesh_adjust
     php_compat_scan
+}
+
+# SSH-Schlüssel von ec2-user der Quelle ergänzen (z.B. nachträglich
+# eingetragene PuTTY-Schlüssel). Vorhandene Schlüssel des Ziels bleiben, der
+# Migrationsschlüssel wird nicht übernommen.
+merge_ec2user_keys() {
+    local f=/home/ec2-user/.ssh/authorized_keys keys tmp
+    getent passwd ec2-user >/dev/null || return 0
+    keys=$(src_ssh 'cat ~/.ssh/authorized_keys' 2>/dev/null </dev/null | grep -v 'linuxservermigration$' | grep -E '^(ssh-|ecdsa-|sk-)' || true)
+    [[ -n "$keys" ]] || return 0
+    install -d -m 700 -o ec2-user -g ec2-user /home/ec2-user/.ssh
+    tmp=$(mktemp)
+    { cat "$f" 2>/dev/null || true; printf '%s\n' "$keys"; } | awk 'NF && !seen[$0]++' >"$tmp"
+    if ! cmp -s "$tmp" "$f"; then
+        install -m 600 -o ec2-user -g ec2-user "$tmp" "$f"
+        log "SSH-Schlüssel von ec2-user der Quelle übernommen ($(wc -l <"$f") Schlüssel insgesamt)"
+    fi
+    rm -f "$tmp"
 }
 
 # rsync mit Statistik ins Log. Exit-Code 24 ("Dateien während der Übertragung
