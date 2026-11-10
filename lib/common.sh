@@ -139,6 +139,11 @@ install_generated() {
     local new=$1 dest=$2 mode=${3:-0644} owner=${4:-root:root}
     local ref="$WORK_DIR/generated$dest"
     mkdir -p "$(dirname "$ref")" "$(dirname "$dest")"
+    # Früher erzeugt und danach von Hand gelöscht: bewusst so lassen
+    if [[ ! -e "$dest" && -f "$ref" ]]; then
+        log "$dest wurde gelöscht – wird nicht neu angelegt (zum Wiederherstellen: rm $ref)"
+        return 0
+    fi
     if [[ -e "$dest" ]] && ! { [[ -f "$ref" ]] && cmp -s "$dest" "$ref"; }; then
         if cmp -s "$dest" "$new"; then
             cp -f "$new" "$ref"
