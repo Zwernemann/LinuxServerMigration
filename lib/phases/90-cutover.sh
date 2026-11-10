@@ -64,12 +64,18 @@ EOF
         move_eip "$me"
     fi
 
+    local certhint="Let's Encrypt: 'certbot renew --dry-run' testen"
+    [[ -x /root/.acme.sh/acme.sh ]] &&
+        certhint="Let's Encrypt (acme.sh): '/root/.acme.sh/acme.sh --list' prüfen, Erneuerung mit --renew --force testen"
+    [[ -x /root/.acme.sh/acme.sh || -d /etc/letsencrypt/renewal ]] || certhint="Zertifikate: keine Let's-Encrypt-Einrichtung gefunden"
+    local iphint="Ohne Elastic IP: DNS-Einträge (A-Record) auf die IP des neuen Servers ändern"
+    [[ -z "$ELASTIC_IP_ALLOCATION_ID" ]] || iphint="Elastic IP ist umgehängt – PuTTY/SSH meldet einen geänderten Host-Schlüssel (richtig so)"
     cat >&2 <<EOF
 
   Cutover abgeschlossen. Nächste Schritte:
    - Website im Browser prüfen; Bericht: $WORK_DIR/report.md
-   - Ohne Elastic IP: DNS-Einträge (A-Record) auf die IP des neuen Servers ändern
-   - Let's Encrypt: 'certbot renew --dry-run' testen
+   - $iphint
+   - $certhint
    - Den alten Server einige Tage gestoppt aufbewahren (AMI/Snapshot anlegen),
      erst dann terminieren.
    - Zurück zur Quelle: ./migrate.sh rollback
