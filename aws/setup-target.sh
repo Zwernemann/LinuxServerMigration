@@ -20,6 +20,8 @@
 #                         (z.B. /daten wie auf dem alten Server)
 #    --conf KEY=WERT      Einstellung in migration.conf setzen (mehrfach möglich),
 #                         z.B. --conf 'EXTRA_PACKAGES=mc s-nail'
+#    --ssh-port PORT      SSH auf dem neuen Server auf diesen Port legen
+#                         (z.B. denselben wie auf dem alten Server)
 #    --no-swap            keine Auslagerungsdatei anlegen (sonst automatisch
 #                         2 GB, wenn der Server weniger als 2 GB RAM hat)
 #
@@ -28,7 +30,7 @@
 # =============================================================================
 set -euo pipefail
 
-SRC_HOST=""; SRC_PORT=22; SRC_INSTANCE=""; REGION=""; EIP=""; DATA_MOUNT=""; SWAP=1
+SRC_HOST=""; SRC_PORT=22; SRC_INSTANCE=""; REGION=""; EIP=""; DATA_MOUNT=""; SWAP=1; SSH_PORT=""
 CONF_SET=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -40,7 +42,8 @@ while [[ $# -gt 0 ]]; do
     --data-mount) DATA_MOUNT=$2; shift 2 ;;
     --conf) CONF_SET+=("$2"); shift 2 ;;
     --no-swap) SWAP=0; shift ;;
-    -h | --help) sed -n '2,29p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --ssh-port) SSH_PORT=$2; shift 2 ;;
+    -h | --help) sed -n '2,31p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "Unbekannte Option: $1" >&2; exit 2 ;;
     esac
 done
@@ -114,6 +117,23 @@ if [[ $SWAP == 1 && -z "$(swapon --noheadings 2>/dev/null)" ]] &&
     fi
     swapon /swapfile
     grep -q '^/swapfile ' /etc/fstab || echo '/swapfile none swap defaults 0 0' >>/etc/fstab
+fi
+
+# SSH-Port wie auf dem alten Server (Port 22 bleibt dann zu)
+if [[ -n "$SSH_PORT" && "$SSH_PORT" != 22 ]]; then
+    echo "==> SSH auf Port $SSH_PORT"
+    echo "Port $SSH_PORT" >/etc/ssh/sshd_config.d/10-port.conf
+    if [[ "$(getenforce 2>/dev/null)" == Enforcing ]]; then
+        rpm -q policycoreutils-python-utils >/dev/null 2>&1 || dnf -y -q install policycoreutils-python-utils
+        semanage port -a -t ssh_port_t -p tcp "$SSH_PORT" 2>/dev/null ||
+            semanage port -m -t ssh_port_t -p tcp "$SSH_PORT"
+    fi
+    if sshd -t; then
+        systemctl restart sshd
+    else
+        rm -f /etc/ssh/sshd_config.d/10-port.conf
+        echo "FEHLER: sshd-Konfiguration ungültig – Port nicht geändert." >&2
+    fi
 fi
 
 echo "==> SSH-Schlüssel für den Zugriff auf den alten Server"

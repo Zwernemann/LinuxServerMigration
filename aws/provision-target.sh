@@ -28,7 +28,8 @@
 #    --old-instance ID   Instance-ID des alten Servers
 #    --old-ip IP         … oder seine öffentliche/Elastic/private IP
 #                        (eins von beiden ist Pflicht)
-#    --src-ssh-port P    SSH-Port des alten Servers (Standard: 22)
+#    --src-ssh-port P    SSH-Port des alten Servers (Standard: 22); der neue
+#                        Server bekommt denselben SSH-Port
 #    --instance-type T   Instanztyp des neuen Servers (Standard: wie alt,
 #                        t2/m4/c4/r4 werden auf die aktuelle Generation gehoben)
 #    --disk-size GB      Größe der Systemplatte (Standard: Summe der Platten
@@ -324,7 +325,7 @@ say "Warte, bis sich der neue Server beim Session Manager meldet (ca. 1-3 Minute
 wait_ssm "$NEW" 600 || die "Neuer Server meldet sich nicht beim Session Manager. Hat das Subnetz Internetzugang (Internet- oder NAT-Gateway)? Läuft er mit der Rolle $ROLE?"
 
 say "Installiere das Migrations-Tool auf dem neuen Server"
-SETUP_ARGS=$(printf ' %q' --src-host "$PRIV" --src-port "$SRCPORT" --src-instance "$OLD" --region "$REGION" --eip "$EIP")
+SETUP_ARGS=$(printf ' %q' --src-host "$PRIV" --src-port "$SRCPORT" --ssh-port "$SRCPORT" --src-instance "$OLD" --region "$REGION" --eip "$EIP")
 [[ -z "$DATADIR" ]] || SETUP_ARGS+=$(printf ' %q' --data-mount "$DATADIR")
 for kv in ${CONFS[@]+"${CONFS[@]}"}; do SETUP_ARGS+=$(printf ' %q' --conf "$kv"); done
 BOOT="set -e
