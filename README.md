@@ -67,6 +67,18 @@ cd LinuxServerMigration
 bash aws/provision-target.sh --old-instance i-0abc123def4567890
 ```
 
+Beispiel mit abweichendem SSH-Port, fester Instanzgröße, eigener Datenplatte
+und Zusatzeinstellungen:
+
+```bash
+bash aws/provision-target.sh --old-instance i-0abc123def4567890 --src-ssh-port 22978 \
+  --instance-type t3.micro --data-volume 30:/daten \
+  --conf 'EXTRA_PACKAGES=mc s-nail' --conf 'EXTRA_PATHS=/batchfiles /daten/certs'
+```
+
+Statt `--old-instance` geht auch `--old-ip <IP>`. Bei weniger als 2 GB RAM
+legt das Skript automatisch eine Auslagerungsdatei (2 GB) an.
+
 Das Skript legt den neuen AL2023-Server neben dem alten an (gleiches
 Netzwerk, gleiche Security Groups, gleiches Schlüsselpaar) und installiert
 das Tool. Außerdem richtet es den SSH-Zugang zum alten Server ein und

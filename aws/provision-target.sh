@@ -5,6 +5,9 @@
 #  aws-cli und Zugangsdaten sind dort schon vorhanden).
 #
 #    bash aws/provision-target.sh --old-instance i-0123456789abcdef0
+#    bash aws/provision-target.sh --old-ip 54.72.0.198 --src-ssh-port 22978 \
+#         --instance-type t3.micro --data-volume 30:/daten \
+#         --conf 'EXTRA_PACKAGES=mc s-nail' --conf 'EXTRA_PATHS=/batchfiles'
 #
 #  Was passiert:
 #   1. Daten des alten Servers lesen (VPC, Subnetz, Security Groups,
@@ -22,12 +25,20 @@
 #      Session Manager, sonst mit einer Anleitung für einen Befehl.
 #
 #  Optionen:
-#    --old-instance ID   Instance-ID des alten Servers (Pflicht)
+#    --old-instance ID   Instance-ID des alten Servers
+#    --old-ip IP         … oder seine öffentliche/Elastic/private IP
+#                        (eins von beiden ist Pflicht)
 #    --src-ssh-port P    SSH-Port des alten Servers (Standard: 22)
 #    --instance-type T   Instanztyp des neuen Servers (Standard: wie alt,
 #                        t2/m4/c4/r4 werden auf die aktuelle Generation gehoben)
 #    --disk-size GB      Größe der Systemplatte (Standard: Summe der Platten
 #                        des alten Servers, mindestens 20)
+#    --data-volume GB:DIR zusätzliche Datenplatte anlegen und unter DIR
+#                        einhängen, z.B. 30:/daten (die Systemplatte bekommt
+#                        dann den Rest, mindestens 20 GB)
+#    --conf KEY=WERT     Einstellung für migration.conf (mehrfach möglich),
+#                        z.B. --conf 'EXTRA_PATHS=/batchfiles /daten/kopie'
+#                        (keine Passwörter – die gehören direkt auf den Server)
 #    --new-instance ID   einen bereits angelegten AL2023-Server verwenden,
 #                        statt einen neuen zu starten
 #    --name NAME         Name des neuen Servers (Standard: <alter Name>-al2023)
@@ -40,16 +51,19 @@
 # =============================================================================
 set -euo pipefail
 
-OLD=""; NEWARG=""; SRCPORT=22; TYPE=""; DISK=""; NAME=""; YES=0; CLEANUP=0
+OLD=""; OLDIP=""; DATAVOL=""; CONFS=(); NEWARG=""; SRCPORT=22; TYPE=""; DISK=""; NAME=""; YES=0; CLEANUP=0
 REGION=${AWS_REGION:-${AWS_DEFAULT_REGION:-}}
 REPO_URL=${REPO_URL:-https://github.com/Zwernemann/LinuxServerMigration.git}
 REPO_BRANCH=${REPO_BRANCH:-$(git -C "$(dirname "$0")" rev-parse --abbrev-ref HEAD 2>/dev/null || echo main)}
 ROLE=LinuxServerMigrationRole
 
-usage() { sed -n '2,43p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+usage() { sed -n '2,57p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 while [[ $# -gt 0 ]]; do
     case "$1" in
     --old-instance | -i) OLD=$2; shift 2 ;;
+    --old-ip) OLDIP=$2; shift 2 ;;
+    --data-volume) DATAVOL=$2; shift 2 ;;
+    --conf) CONFS+=("$2"); shift 2 ;;
     --new-instance) NEWARG=$2; shift 2 ;;
     --src-ssh-port) SRCPORT=$2; shift 2 ;;
     --instance-type) TYPE=$2; shift 2 ;;
@@ -62,7 +76,16 @@ while [[ $# -gt 0 ]]; do
     *) echo "Unbekannte Option: $1" >&2; usage 2 ;;
     esac
 done
-[[ -n "$OLD" ]] || { echo "Bitte --old-instance i-... angeben (EC2-Konsole -> Instanzen -> Instance-ID)." >&2; exit 2; }
+[[ -n "$OLD" || -n "$OLDIP" ]] || { echo "Bitte --old-ip <IP> oder --old-instance i-... angeben." >&2; exit 2; }
+DATASIZE=""; DATADIR=""
+if [[ -n "$DATAVOL" ]]; then
+    [[ "$DATAVOL" =~ ^([0-9]+):(/.+)$ ]] || { echo "--data-volume erwartet GB:VERZEICHNIS, z.B. 30:/daten" >&2; exit 2; }
+    DATASIZE=${BASH_REMATCH[1]} DATADIR=${BASH_REMATCH[2]}
+fi
+for kv in ${CONFS[@]+"${CONFS[@]}"}; do
+    [[ "$kv" =~ ^[A-Z_][A-Z0-9_]*= ]] || { echo "--conf erwartet KEY=WERT: '$kv'" >&2; exit 2; }
+    [[ "${kv%%=*}" != *PASS* ]] || { echo "Passwörter bitte nicht über --conf übergeben, sondern auf dem neuen Server eintragen." >&2; exit 2; }
+done
 
 say() { printf '\n\033[1m==> %s\033[0m\n' "$*" >&2; }
 info() { printf '    %s\n' "$*" >&2; }
@@ -114,6 +137,16 @@ wait_ssm() { # wait_ssm <instance-id> <sekunden>
 }
 
 # ---------------------------------------------------------------------------
+if [[ -z "$OLD" ]]; then
+    for f in ip-address private-ip-address; do
+        OLD=$(aws ec2 describe-instances --filters "Name=$f,Values=$OLDIP" \
+            "Name=instance-state-name,Values=pending,running,stopping,stopped" \
+            --query 'Reservations[0].Instances[0].InstanceId' --output text 2>/dev/null || true)
+        none "$OLD" || break
+        OLD=""
+    done
+    [[ -n "$OLD" ]] || die "Kein Server mit der IP $OLDIP in Region $REGION gefunden (richtige Region in der CloudShell oben rechts?)."
+fi
 say "Alter Server $OLD"
 aws ec2 describe-instances --instance-ids "$OLD" >/dev/null ||
     die "Instanz $OLD nicht gefunden (richtige Region $REGION? Rechte für EC2?)."
@@ -217,7 +250,9 @@ if [[ -z "$NEW" ]]; then
     if [[ -z "$DISK" ]]; then
         DISK=$(aws ec2 describe-volumes --filters "Name=attachment.instance-id,Values=$OLD" \
             --query 'sum(Volumes[].Size)' --output text)
-        [[ "$DISK" =~ ^[0-9]+$ && $DISK -ge 20 ]] || DISK=20
+        [[ "$DISK" =~ ^[0-9]+$ ]] || DISK=20
+        [[ -z "$DATASIZE" ]] || DISK=$((DISK - DATASIZE))
+        [[ $DISK -ge 20 ]] || DISK=20
     fi
     [[ "$ARCH" == arm64 ]] && AMIARCH=arm64 || AMIARCH=x86_64
     AMI=$(aws ssm get-parameter --name "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-$AMIARCH" \
@@ -225,7 +260,8 @@ if [[ -z "$NEW" ]]; then
     NAME=${NAME:-$OLDNAME-al2023}
 
     say "Geplanter neuer Server"
-    info "Name: $NAME   Typ: $TYPE   Platte: $DISK GB gp3 (verschlüsselt)"
+    info "Name: $NAME   Typ: $TYPE   Systemplatte: $DISK GB gp3 (verschlüsselt)"
+    [[ -z "$DATASIZE" ]] || info "Datenplatte: $DATASIZE GB gp3 (verschlüsselt), eingehängt unter $DATADIR"
     info "AMI: $AMI (aktuelles Amazon Linux 2023)"
     info "Subnetz: $SUBNET (wie alt)   Security Groups: ${OLDSGS[*]} + $MIGSG_NAME"
     info "Schlüsselpaar: ${KEY/None/keins – Zugang nur über Session Manager}"
@@ -241,10 +277,12 @@ if [[ -z "$NEW" ]]; then
     args=(--image-id "$AMI" --instance-type "$TYPE" --subnet-id "$SUBNET"
         --security-group-ids "${OLDSGS[@]}" "$MIGSG"
         --iam-instance-profile "Name=$ROLE"
-        --block-device-mappings "DeviceName=/dev/xvda,Ebs={VolumeSize=$DISK,VolumeType=gp3,Encrypted=true}"
         --metadata-options "HttpTokens=required,HttpPutResponseHopLimit=2"
         --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=$NAME},{Key=linuxservermigration,Value=$OLD}]"
         --query 'Instances[0].InstanceId' --output text)
+    bdm=("DeviceName=/dev/xvda,Ebs={VolumeSize=$DISK,VolumeType=gp3,Encrypted=true}")
+    [[ -z "$DATASIZE" ]] || bdm+=("DeviceName=/dev/sdb,Ebs={VolumeSize=$DATASIZE,VolumeType=gp3,Encrypted=true}")
+    args+=(--block-device-mappings "${bdm[@]}")
     none "$KEY" || args+=(--key-name "$KEY")
     none "$PUB" || args+=(--associate-public-ip-address)
     # Neue IAM-Rollen brauchen einige Sekunden, bis EC2 sie kennt
@@ -286,6 +324,9 @@ say "Warte, bis sich der neue Server beim Session Manager meldet (ca. 1-3 Minute
 wait_ssm "$NEW" 600 || die "Neuer Server meldet sich nicht beim Session Manager. Hat das Subnetz Internetzugang (Internet- oder NAT-Gateway)? Läuft er mit der Rolle $ROLE?"
 
 say "Installiere das Migrations-Tool auf dem neuen Server"
+SETUP_ARGS=$(printf ' %q' --src-host "$PRIV" --src-port "$SRCPORT" --src-instance "$OLD" --region "$REGION" --eip "$EIP")
+[[ -z "$DATADIR" ]] || SETUP_ARGS+=$(printf ' %q' --data-mount "$DATADIR")
+for kv in ${CONFS[@]+"${CONFS[@]}"}; do SETUP_ARGS+=$(printf ' %q' --conf "$kv"); done
 BOOT="set -e
 exec 2>&1
 command -v git >/dev/null || dnf -y -q install git
@@ -294,8 +335,9 @@ if [ -d /opt/linuxservermigration/.git ]; then
 else
   git clone -q -b '$REPO_BRANCH' '$REPO_URL' /opt/linuxservermigration
 fi
-bash /opt/linuxservermigration/aws/setup-target.sh --src-host '$PRIV' --src-port '$SRCPORT' --src-instance '$OLD' --region '$REGION' --eip '$EIP'"
+bash /opt/linuxservermigration/aws/setup-target.sh$SETUP_ARGS"
 OUT=$(ssm_run "$NEW" "$BOOT") || die "Einrichtung des neuen Servers fehlgeschlagen (Ausgabe siehe oben)."
+grep -E '^(==>|    )' <<<"$OUT" | sed 's/^/    /' >&2 || true
 PUBKEY=$(sed -n 's/^PUBKEY=//p' <<<"$OUT" | tr -d '\r' | tail -n 1)
 [[ "$PUBKEY" == ssh-ed25519* ]] || { echo "$OUT" | tail -n 20 >&2; die "Kein SSH-Schlüssel auf dem neuen Server gefunden."; }
 info "Tool installiert: /opt/linuxservermigration"
@@ -354,8 +396,10 @@ cat >&2 <<EOF
       sudo -i
       tmux new -s migration            # Sitzung bleibt bei Verbindungsabbruch erhalten
       cd /opt/linuxservermigration
-      vi migration.conf                # SRC_DB_PASS eintragen (MySQL-root-Passwort des alten Servers)
+      # MySQL-Zugang des alten Servers eintragen (entfällt, wenn dort /root/.my.cnf existiert):
+      echo 'SRC_DB_USER="root"' >> migration.conf; echo 'SRC_DB_PASS="PASSWORT"' >> migration.conf
       ./migrate.sh preflight
+      ./migrate.sh inventory
       ./migrate.sh all
 
     Nach abgebrochener Verbindung: sudo -i; tmux attach -t migration

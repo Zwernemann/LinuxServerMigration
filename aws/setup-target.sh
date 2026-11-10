@@ -16,13 +16,20 @@
 #    --src-instance ID    Instance-ID des alten Servers (für rollback)
 #    --region R           AWS-Region
 #    --eip ALLOC          Allocation-ID der Elastic IP (für cutover)
+#    --data-mount DIR     leere Zusatzplatte formatieren und unter DIR einhängen
+#                         (z.B. /daten wie auf dem alten Server)
+#    --conf KEY=WERT      Einstellung in migration.conf setzen (mehrfach möglich),
+#                         z.B. --conf 'EXTRA_PACKAGES=mc s-nail'
+#    --no-swap            keine Auslagerungsdatei anlegen (sonst automatisch
+#                         2 GB, wenn der Server weniger als 2 GB RAM hat)
 #
 #  Danach steht der öffentliche Schlüssel in der letzten Zeile (PUBKEY=…);
 #  er muss beim alten Server in ~ec2-user/.ssh/authorized_keys stehen.
 # =============================================================================
 set -euo pipefail
 
-SRC_HOST=""; SRC_PORT=22; SRC_INSTANCE=""; REGION=""; EIP=""
+SRC_HOST=""; SRC_PORT=22; SRC_INSTANCE=""; REGION=""; EIP=""; DATA_MOUNT=""; SWAP=1
+CONF_SET=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
     --src-host) SRC_HOST=$2; shift 2 ;;
@@ -30,7 +37,10 @@ while [[ $# -gt 0 ]]; do
     --src-instance) SRC_INSTANCE=$2; shift 2 ;;
     --region) REGION=$2; shift 2 ;;
     --eip) EIP=$2; shift 2 ;;
-    -h | --help) sed -n '2,23p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --data-mount) DATA_MOUNT=$2; shift 2 ;;
+    --conf) CONF_SET+=("$2"); shift 2 ;;
+    --no-swap) SWAP=0; shift ;;
+    -h | --help) sed -n '2,29p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "Unbekannte Option: $1" >&2; exit 2 ;;
     esac
 done
@@ -51,6 +61,59 @@ if [[ ${#missing[@]} -gt 0 ]]; then
         sleep 15
     done
     [[ $ok == 1 ]] || { echo "FEHLER: Pakete nicht installierbar. Hat der Server Internetzugang?" >&2; exit 1; }
+fi
+
+# Leere Zusatzplatte (kein Dateisystem, keine Partitionen, nicht die
+# Systemplatte) formatieren und dauerhaft einhängen
+setup_data_mount() {
+    local dir=$1 rootdisk dev d uuid
+    if mountpoint -q "$dir"; then
+        echo "    $dir ist bereits eingehängt"
+        return 0
+    fi
+    if grep -qE "[[:space:]]${dir}[[:space:]]" /etc/fstab; then
+        mkdir -p "$dir"
+        mount "$dir" && { echo "    $dir eingehängt (fstab)"; return 0; }
+    fi
+    rootdisk=$(lsblk -no PKNAME "$(findmnt -no SOURCE /)" | head -n 1)
+    dev=""
+    while read -r d; do
+        [[ "$(basename "$d")" == "$rootdisk" ]] && continue
+        [[ $(lsblk -no NAME "$d" | wc -l) -eq 1 ]] || continue          # hat Partitionen
+        [[ -z "$(lsblk -no FSTYPE "$d" | tr -d '[:space:]')" ]] || continue  # hat ein Dateisystem
+        [[ -z "$(lsblk -no MOUNTPOINT "$d" | tr -d '[:space:]')" ]] || continue
+        dev=$d
+        break
+    done < <(lsblk -dnpo NAME,TYPE | awk '$2 == "disk" {print $1}')
+    if [[ -z "$dev" ]]; then
+        echo "FEHLER: keine leere Zusatzplatte für $dir gefunden (lsblk prüfen)." >&2
+        return 1
+    fi
+    echo "    formatiere $dev (xfs) und hänge es unter $dir ein"
+    mkfs.xfs -q "$dev"
+    mkdir -p "$dir"
+    uuid=$(blkid -s UUID -o value "$dev")
+    echo "UUID=$uuid $dir xfs defaults,nofail 0 2" >>/etc/fstab
+    mount "$dir"
+    df -h "$dir" | tail -n 1 | sed 's/^/    /'
+}
+
+if [[ -n "$DATA_MOUNT" ]]; then
+    echo "==> Datenplatte $DATA_MOUNT"
+    setup_data_mount "$DATA_MOUNT"
+fi
+
+# Wenig Arbeitsspeicher (z.B. t3.micro mit 1 GB): MySQL 8 + PHP-FPM brauchen Swap
+if [[ $SWAP == 1 && -z "$(swapon --noheadings 2>/dev/null)" ]] &&
+    [[ $(awk '/MemTotal/ {print $2}' /proc/meminfo) -lt 2000000 ]]; then
+    echo "==> Auslagerungsdatei /swapfile (2 GB) – der Server hat weniger als 2 GB RAM"
+    if [[ ! -f /swapfile ]]; then
+        dd if=/dev/zero of=/swapfile bs=1M count=2048 status=none
+        chmod 600 /swapfile
+        mkswap -q /swapfile 2>/dev/null || mkswap /swapfile >/dev/null
+    fi
+    swapon /swapfile
+    grep -q '^/swapfile ' /etc/fstab || echo '/swapfile none swap defaults 0 0' >>/etc/fstab
 fi
 
 echo "==> SSH-Schlüssel für den Zugriff auf den alten Server"
@@ -87,6 +150,18 @@ EOF
 else
     echo "    existiert bereits – unverändert"
 fi
+# --conf KEY=WERT: Einstellung setzen (vorhandene Zeile wird ersetzt)
+for kv in ${CONF_SET[@]+"${CONF_SET[@]}"}; do
+    k=${kv%%=*}
+    v=${kv#*=}
+    [[ "$k" =~ ^[A-Z_][A-Z0-9_]*$ && "$kv" == *=* ]] || { echo "FEHLER: ungültige Einstellung '$kv'" >&2; exit 2; }
+    v=${v//\\/\\\\}; v=${v//\"/\\\"}; v=${v//\$/\\\$}; v=${v//\`/\\\`}
+    grep -v "^$k=" "$CONF" >"$CONF.tmp" || true
+    printf '%s="%s"\n' "$k" "$v" >>"$CONF.tmp"
+    cat "$CONF.tmp" >"$CONF"
+    rm -f "$CONF.tmp"
+    echo "    $k=\"$v\""
+done
 grep -q '^SRC_HOST="[^"]' "$CONF" || echo "    ACHTUNG: SRC_HOST ist leer – bitte in $CONF eintragen." >&2
 
 touch /var/lib/linuxservermigration-ready
