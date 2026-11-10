@@ -157,6 +157,10 @@ TARGET_DB_ENGINE="mysql84"
 TARGET_PHP_VERSION="8.0"
 CERTBOT_SETUP="yes"
 WEB_PATHS="/var/www /srv/leer"
+# Die Testquelle hat PHP 8 und führt .php3 nicht aus – Schicht und .php3
+# trotzdem testen
+PHP_MYSQL_SHIM="yes"
+PHP_LEGACY_EXTENSIONS="yes"
 PHP_LINT="yes"
 CONF
 EOF

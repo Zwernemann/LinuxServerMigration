@@ -132,7 +132,8 @@ configure_apache() {
 
     # 5) Listen-Ports, Schutz der .user.ini, alte PHP-Endungen, Backup-Dateien
     local legacy
-    legacy=$(legacy_php_extensions)
+    legacy_php_classify
+    legacy=$LEGACY_EXEC
     {
         echo "# Automatisch erzeugt durch LinuxServerMigration"
         cat "$gen"/*.listen 2>/dev/null | sort -u
@@ -148,6 +149,14 @@ configure_apache() {
             echo "    SetHandler \"proxy:$(fpm_listen)|fcgi://localhost\""
             echo '</FilesMatch>'
         fi
+        if [[ -n "$LEGACY_DENY" ]]; then
+            echo
+            echo "# Alte PHP-Endungen, die der alte Server NICHT ausgeführt hat (er hat"
+            echo "# ihren Quelltext ausgeliefert) – gesperrt statt wieder ausführbar"
+            echo "<FilesMatch \"\\.(${LEGACY_DENY// /|})\$\">"
+            echo '    Require all denied'
+            echo '</FilesMatch>'
+        fi
         if is_yes "$DENY_BACKUP_FILES"; then
             echo
             echo "# Backup-/Restdateien (z.B. x.php.bak, x.php3_notUsed, *.inc, *.sql) nicht als Text ausliefern"
@@ -156,7 +165,10 @@ configure_apache() {
             echo '</FilesMatch>'
         fi
     } >"$gen/migrated-00-listen.conf"
-    [[ -z "$legacy" ]] || fpm_allow_extensions "$legacy"
+    fpm_allow_extensions "$legacy"
+    if [[ -n "$LEGACY_DENY" ]]; then
+        warn "Dateien mit .${LEGACY_DENY// /, .} wurden auf dem alten Server nicht von PHP ausgeführt (vermutlich als Text samt Quelltext/Passwörtern lesbar) – auf dem neuen Server gesperrt (403). Prüfen, ob sie gebraucht werden."
+    fi
     is_yes "$DENY_BACKUP_FILES" && report_backup_files
     generated=(migrated-00-listen.conf "${generated[@]}")
 
@@ -216,17 +228,34 @@ configure_apache() {
 # x.php3_notUsed, x.php~) sowie *.inc, *.bak, *.old, *.orig, *.swp, *.sql
 BACKUP_FILES_RE='(\.(php[0-9]?|phtml)[^0-9A-Za-z/][^/]*|\.(inc|bak|old|orig|swp|sql))$'
 
-# Welche alten PHP-Endungen kommen in den Webverzeichnissen vor?
-legacy_php_extensions() {
-    case "${PHP_LEGACY_EXTENSIONS,,}" in no | false | 0) return 0 ;; esac
-    local ext found=()
+# Hat der alte Apache Dateien mit dieser Endung an PHP übergeben?
+# (AddType/AddHandler/SetHandler/FilesMatch in httpd-Konfiguration oder .htaccess)
+source_executes_ext() {
+    local re="^[[:space:]]*(AddType|AddHandler|SetHandler|<FilesMatch)[^#]*\b$1\b"
+    {
+        grep -rhiE "$re" "$(snap /etc/httpd)" 2>/dev/null
+        web_paths | tr '\n' '\0' | xargs -0 -r -I{} find {} -name .htaccess -type f \
+            -exec grep -hiE "$re" {} + 2>/dev/null
+    } | grep -q .
+}
+
+# Alte PHP-Endungen (.php3 …) in den Webverzeichnissen einordnen:
+#   LEGACY_EXEC – wurden auf der Quelle von PHP ausgeführt -> weiter ausführen
+#   LEGACY_DENY – wurden auf der Quelle NICHT ausgeführt (also als Text mit
+#                 Quelltext ausgeliefert) -> auf dem Ziel sperren
+legacy_php_classify() {
+    LEGACY_EXEC="" LEGACY_DENY=""
+    local mode=${PHP_LEGACY_EXTENSIONS,,} ext
+    case "$mode" in no | false | 0) return 0 ;; esac
     for ext in php3 php4 php5 phtml; do
-        if [[ "${PHP_LEGACY_EXTENSIONS,,}" == yes ]] ||
-            web_paths | tr '\n' '\0' | xargs -0 -r -I{} find {} -type f -name "*.$ext" -print -quit 2>/dev/null | grep -q .; then
-            found+=("$ext")
+        if [[ "$mode" == yes ]]; then
+            LEGACY_EXEC+=" $ext"
+            continue
         fi
+        web_paths | tr '\n' '\0' | xargs -0 -r -I{} find {} -type f -name "*.$ext" -print -quit 2>/dev/null | grep -q . || continue
+        if source_executes_ext "$ext"; then LEGACY_EXEC+=" $ext"; else LEGACY_DENY+=" $ext"; fi
     done
-    echo "${found[*]}"
+    LEGACY_EXEC=${LEGACY_EXEC# } LEGACY_DENY=${LEGACY_DENY# }
 }
 
 # Socket/Adresse des PHP-FPM-Pools www für SetHandler
@@ -238,10 +267,18 @@ fpm_listen() {
 }
 
 # PHP-FPM führt aus Sicherheitsgründen nur .php aus – alte Endungen erlauben
+# (ohne Endungen: eine früher vom Tool gesetzte Freigabe wieder entfernen)
 fpm_allow_extensions() {
     local conf=/etc/php-fpm.d/www.conf exts=".php .phar" e
-    for e in $1; do exts="$exts .$e"; done
     [[ -f "$conf" ]] || return 0
+    if [[ -z "$1" ]]; then
+        if grep -q '^; LinuxServerMigration: alte PHP-Endungen der Quelle$' "$conf"; then
+            sed -i '/^; LinuxServerMigration: alte PHP-Endungen der Quelle$/,+1d' "$conf"
+            log "PHP-FPM: Freigabe alter PHP-Endungen entfernt"
+        fi
+        return 0
+    fi
+    for e in $1; do exts="$exts .$e"; done
     if grep -q '^security.limit_extensions' "$conf"; then
         sed -i "s/^security.limit_extensions.*/security.limit_extensions = $exts/" "$conf"
     else
@@ -274,6 +311,18 @@ configure_mysql_shim() {
             n=$((n + $({ grep -rlE --include='*.php*' --include='*.phtml' --include='*.inc' \
                 '\bmysql_[a-z_]+[[:space:]]*\(' "$p" 2>/dev/null || true; } | wc -l)))
         done < <(web_paths)
+        # Lief die Quelle schon mit PHP >= 7, gab es dort kein mysql_* mehr: Code
+        # damit war dort tot und soll auf dem Ziel nicht wieder lauffähig werden.
+        local sv
+        sv=$(inv_get SRC_PHP_VERSION)
+        if [[ "${sv%%.*}" =~ ^[0-9]+$ && ${sv%%.*} -ge 7 ]]; then
+            if [[ -f "$ini" ]] && cmp -s "$ini" "$WORK_DIR/generated$ini"; then
+                rm -f "$ini" "$WORK_DIR/generated$ini"
+                log "mysql_*-Kompatibilitätsschicht wieder entfernt"
+            fi
+            [[ $n -eq 0 ]] || warn "$n Dateien verwenden mysql_*, das schon auf dem alten Server (PHP $sv) nicht mehr existierte – vermutlich ungenutzter Code. Keine Kompatibilitätsschicht aktiviert."
+            return 0
+        fi
         [[ $n -gt 0 ]] || return 0
     fi
     step "mysql_*-Kompatibilität"

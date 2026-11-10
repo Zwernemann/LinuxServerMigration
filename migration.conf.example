@@ -89,10 +89,13 @@ PHP_INI_KEYS="memory_limit upload_max_filesize post_max_size max_execution_time 
 PECL_AUTO="yes"
 # Alten Code mit mysql_*-Funktionen (in PHP 7 entfernt) unverändert weiter
 # betreiben: Kompatibilitätsschicht per auto_prepend_file laden
-#   auto = nur wenn der Code mysql_* verwendet
+#   auto = nur wenn der Code mysql_* verwendet UND die Quelle PHP < 7 hatte
+#          (bei PHP >= 7 gab es mysql_* dort schon nicht mehr -> toter Code)
 PHP_MYSQL_SHIM="auto"
-# .php3/.php4/.php5/.phtml-Dateien wie .php ausführen (statt sie als Text
-# auszuliefern – inklusive Passwörtern im Quelltext)
+# .php3/.php4/.php5/.phtml-Dateien:
+#   auto = ausführen, wenn der alte Apache sie an PHP übergeben hat, sonst
+#          sperren (403) – nie als Text mit Quelltext ausliefern
+#   yes  = immer ausführen, no = nicht anfassen
 PHP_LEGACY_EXTENSIONS="auto"
 # Backup-/Restdateien wie datei.php.bak, datei.php3_notUsed, *.inc, *.sql
 # für den Webzugriff sperren (würden sonst als Text ausgeliefert)
